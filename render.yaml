@@ -2,14 +2,15 @@ services:
   - type: web
     name: roof-estimator-backend
     env: python
+    plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
     envVars:
       - key: DATABASE_URL
         sync: false
       - key: SECRET_KEY
-        sync: false
+        generateValue: true
       - key: OPENAI_API_KEY
         sync: false
-    runtime: python
-    pythonVersion: 3.11.9
+    runtime:
+      pythonVersion: 3.11
