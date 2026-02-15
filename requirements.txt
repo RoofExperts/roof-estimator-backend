@@ -8,3 +8,4 @@ python-jose
 openai
 pymupdf
 openpyxl
+python-multipart
