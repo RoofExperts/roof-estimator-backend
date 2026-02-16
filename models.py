@@ -18,7 +18,10 @@ class Project(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer)
     project_name = Column(String)
+    spec_file_url = Column(String, nullable=True)
     address = Column(String)
     system_type = Column(String)
     roof_area = Column(Float)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
