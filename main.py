@@ -1,13 +1,15 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from database import engine, SessionLocal
 from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
-from fastapi import UploadFile, File
 from s3_service import upload_file_to_s3
+from spec_ai import extract_text_from_pdf, analyze_spec_text
 
+import requests
+import tempfile
 
 app = FastAPI()
 
@@ -100,12 +102,11 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
     return {"message": "Project created successfully"}
 
 # =============================
-# LIST PROJECTS (Shared View)
+# LIST PROJECTS
 # =============================
 @app.get("/projects")
 def list_projects(db: Session = Depends(get_db)):
-    projects = db.query(Project).all()
-    return projects
+    return db.query(Project).all()
 
 @app.get("/projects/{project_id}")
 def get_project(project_id: int, db: Session = Depends(get_db)):
@@ -116,8 +117,12 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
     return project
 
+# =============================
+# UPLOAD SPEC
+# =============================
 @app.post("/projects/{project_id}/upload-spec")
 def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+
     project = db.query(Project).filter(Project.id == project_id).first()
 
     if not project:
@@ -125,8 +130,43 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
 
     file_url = upload_file_to_s3(file, project_id, "specs")
 
-    return {
-        "message": "Spec uploaded successfully",
-        "file_url": file_url
-    }
+    project.spec_file_url = file_url
+    db.commit()
+    db.refresh(project)
 
+    return {"message": "Spec uploaded successfully", "file_url": file_url}
+
+# =============================
+# ANALYZE SPEC (AI)
+# =============================
+@app.post("/projects/{project_id}/analyze-spec")
+def analyze_spec(project_id: int, db: Session = Depends(get_db)):
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+
+    if not project or not project.spec_file_url:
+        raise HTTPException(status_code=404, detail="Spec file not found")
+
+    # Download the spec from S3 temporarily
+    response = requests.get(project.spec_file_url)
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=500, detail="Failed to download spec file")
+
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        tmp.write(response.content)
+        temp_path = tmp.name
+
+    # Extract text from PDF
+    spec_text = extract_text_from_pdf(temp_path)
+
+    if not spec_text:
+        raise HTTPException(status_code=400, detail="Unable to extract text from spec")
+
+    # Send to AI
+    ai_result = analyze_spec_text(spec_text)
+
+    return {
+        "project_id": project_id,
+        "analysis": ai_result
+    }
