@@ -5,6 +5,9 @@ from database import engine, SessionLocal
 from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
+from fastapi import UploadFile, File
+from s3_service import upload_file_to_s3
+
 
 app = FastAPI()
 
@@ -112,3 +115,18 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project
+
+@app.post("/projects/{project_id}/upload-spec")
+def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    file_url = upload_file_to_s3(file, project_id, "specs")
+
+    return {
+        "message": "Spec uploaded successfully",
+        "file_url": file_url
+    }
+
