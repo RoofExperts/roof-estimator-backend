@@ -10,3 +10,4 @@ openpyxl
 python-multipart
 boto3
 pdfplumber
+requests
