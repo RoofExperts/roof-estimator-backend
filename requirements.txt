@@ -8,3 +8,4 @@ openai
 pymupdf
 openpyxl
 python-multipart
+boto3
