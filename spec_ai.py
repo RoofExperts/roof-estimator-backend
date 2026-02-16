@@ -1,9 +1,8 @@
 import pdfplumber
-import openai
 import os
+from openai import OpenAI
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-openai.api_key = OPENAI_API_KEY
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 def extract_text_from_pdf(file_path):
     text = ""
@@ -13,6 +12,7 @@ def extract_text_from_pdf(file_path):
     return text
 
 def analyze_spec_text(spec_text):
+
     prompt = f"""
     You are a commercial roofing specification analyzer.
 
@@ -29,13 +29,13 @@ def analyze_spec_text(spec_text):
     - special_requirements
 
     Specification:
-    {spec_text}
+    {spec_text[:15000]}
     """
 
-    response = openai.ChatCompletion.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
-            {"role": "system", "content": "You extract roofing system specs."},
+            {"role": "system", "content": "You extract structured roofing system data."},
             {"role": "user", "content": prompt}
         ],
         temperature=0
