@@ -10,7 +10,6 @@ from spec_ai import extract_text_from_pdf, analyze_spec_text
 
 import requests
 import tempfile
-from spec_ai import extract_text_from_pdf
 
 app = FastAPI()
 
