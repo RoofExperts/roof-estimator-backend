@@ -5,11 +5,11 @@ from database import engine, SessionLocal
 from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
-from s3_service import upload_file_to_s3
+from s3_service import upload_file_to_s3, download_file_from_s3
 from spec_ai import extract_text_from_pdf, analyze_spec_text
 
-import requests
 import tempfile
+import os
 
 app = FastAPI()
 
@@ -134,46 +134,54 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
     db.commit()
     db.refresh(project)
 
-    return {"message": "Spec uploaded successfully", "file_url": file_url}
+    return {
+        "message": "Spec uploaded successfully",
+        "file_url": file_url
+    }
 
 # =============================
-# ANALYZE SPEC (AI)
+# ANALYZE SPEC (SECURE S3 DOWNLOAD)
 # =============================
 @app.post("/projects/{project_id}/analyze-spec")
 def analyze_spec(project_id: int, db: Session = Depends(get_db)):
 
-    project = db.query(Project).filter(Project.id == project_id).first()
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
 
-    if not project or not project.spec_file_url:
-        raise HTTPException(status_code=404, detail="Spec file not found")
+        if not project or not project.spec_file_url:
+            raise HTTPException(status_code=404, detail="Spec file not found")
 
-    # Download the spec from S3 temporarily
-    response = requests.get(project.spec_file_url)
+        # Secure download from S3
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            download_file_from_s3(project.spec_file_url, tmp)
+            temp_path = tmp.name
 
-    if response.status_code != 200:
-        raise HTTPException(status_code=500, detail="Failed to download spec file")
+        # Extract PDF text
+        spec_text = extract_text_from_pdf(temp_path)
 
-    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-        tmp.write(response.content)
-        temp_path = tmp.name
+        if not spec_text:
+            return {"error": "No text extracted from PDF"}
 
-    # Extract text from PDF
-    spec_text = extract_text_from_pdf(temp_path)
+        # Prevent token overload
+        spec_text = spec_text[:8000]
 
-    if not spec_text:
-        raise HTTPException(status_code=400, detail="Unable to extract text from spec")
+        # Send to AI
+        ai_result = analyze_spec_text(spec_text)
 
-    # Send to AI
-    ai_result = analyze_spec_text(spec_text)
+        return {
+            "project_id": project_id,
+            "analysis": ai_result
+        }
 
-    return {
-        "project_id": project_id,
-        "analysis": ai_result
-    }
+    except Exception as e:
+        return {"error": str(e)}
+
+# =============================
+# TEST OPENAI DIRECT
+# =============================
 @app.get("/test-openai-direct")
 def test_openai_direct():
     from openai import OpenAI
-    import os
 
     try:
         key = os.getenv("OPENAI_API_KEY")
@@ -181,9 +189,7 @@ def test_openai_direct():
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": "Say hello."}
-            ]
+            messages=[{"role": "user", "content": "Say hello."}]
         )
 
         return {
@@ -192,10 +198,11 @@ def test_openai_direct():
         }
 
     except Exception as e:
-        return {
-            "success": False,
-            "error": str(e)
-        }
+        return {"success": False, "error": str(e)}
+
+# =============================
+# TEST PDF EXTRACTION
+# =============================
 @app.post("/test-pdf")
 def test_pdf(project_id: int, db: Session = Depends(get_db)):
 
@@ -205,10 +212,8 @@ def test_pdf(project_id: int, db: Session = Depends(get_db)):
         if not project or not project.spec_file_url:
             return {"error": "Spec not found"}
 
-        response = requests.get(project.spec_file_url)
-
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(response.content)
+            download_file_from_s3(project.spec_file_url, tmp)
             temp_path = tmp.name
 
         text = extract_text_from_pdf(temp_path)
