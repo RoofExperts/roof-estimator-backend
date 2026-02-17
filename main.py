@@ -170,3 +170,29 @@ def analyze_spec(project_id: int, db: Session = Depends(get_db)):
         "project_id": project_id,
         "analysis": ai_result
     }
+@app.get("/test-openai-direct")
+def test_openai_direct():
+    from openai import OpenAI
+    import os
+
+    try:
+        key = os.getenv("OPENAI_API_KEY")
+        client = OpenAI(api_key=key)
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": "Say hello."}
+            ]
+        )
+
+        return {
+            "success": True,
+            "response": response.choices[0].message.content
+        }
+
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
