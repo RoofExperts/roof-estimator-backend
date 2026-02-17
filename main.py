@@ -196,3 +196,27 @@ def test_openai_direct():
             "success": False,
             "error": str(e)
         }
+@app.post("/test-pdf")
+def test_pdf(project_id: int, db: Session = Depends(get_db)):
+
+    try:
+        project = db.query(Project).filter(Project.id == project_id).first()
+
+        if not project or not project.spec_file_url:
+            return {"error": "Spec not found"}
+
+        response = requests.get(project.spec_file_url)
+
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
+            tmp.write(response.content)
+            temp_path = tmp.name
+
+        text = extract_text_from_pdf(temp_path)
+
+        return {
+            "text_length": len(text),
+            "preview": text[:500]
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
