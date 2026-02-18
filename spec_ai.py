@@ -1,11 +1,13 @@
-import re
 import os
-from openai import OpenAI
+import re
+import json
 import pdfplumber
+from openai import OpenAI
 
-# =============================
+
+# ==========================================================
 # PDF TEXT EXTRACTION
-# =============================
+# ==========================================================
 def extract_text_from_pdf(file_path: str) -> str:
     full_text = ""
 
@@ -18,58 +20,59 @@ def extract_text_from_pdf(file_path: str) -> str:
     return full_text
 
 
-# =============================
-# CSI DIVISION 07 ISOLATION
-# =============================
-def isolate_division_7(text: str) -> str:
-    """
-    Extracts CSI Division 07 section from full spec text.
-    """
-
-    # Normalize text
+# ==========================================================
+# ISOLATE CSI DIVISION 07
+# ==========================================================
+def isolate_division_7(text: str) -> str | None:
     text_upper = text.upper()
 
-    # Find start of Division 07
-    start_match = re.search(r"DIVISION\s*07", text_upper)
+    start_match = re.search(r"DIVISION\s*0?7", text_upper)
     if not start_match:
         return None
 
     start_index = start_match.start()
 
-    # Find next division after 07 (usually 08)
+    # Find next division (usually 08)
     end_match = re.search(r"DIVISION\s*0?8", text_upper[start_index:])
-    
+
     if end_match:
         end_index = start_index + end_match.start()
         return text[start_index:end_index]
     else:
-        # If no Division 08 found, return remainder
         return text[start_index:]
 
 
-# =============================
+# ==========================================================
 # AI ANALYSIS
-# =============================
+# ==========================================================
 def analyze_spec_text(text: str):
-    """
-    Sends Division 07 only to AI for structured extraction.
-    """
 
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return {"error": "OPENAI_API_KEY not configured"}
+
+    client = OpenAI(api_key=api_key)
 
     division_7_text = isolate_division_7(text)
 
     if not division_7_text:
         return {"error": "Division 07 not found in spec"}
 
+    # Prevent timeout / memory spikes
+    MAX_CHARS = 8000
+    division_7_text = division_7_text[:MAX_CHARS]
+
     prompt = f"""
 You are a professional commercial roofing estimator.
 
-Analyze the following CSI Division 07 roofing specification.
+Analyze this CSI Division 07 roofing specification.
 
-Extract ONLY roofing-related information.
+Return STRICT VALID JSON ONLY.
+Do not use markdown.
+Do not use backticks.
+Do not explain anything.
 
-Return STRICT JSON in this format:
+Format exactly like this:
 
 {{
   "roof_system_type": "",
@@ -85,7 +88,7 @@ Return STRICT JSON in this format:
   "special_requirements": ""
 }}
 
-If information is not clearly specified, return null.
+If a value is not specified, return null.
 
 Specification Text:
 ----------------------
@@ -95,10 +98,24 @@ Specification Text:
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
+        max_tokens=600,
         messages=[
             {"role": "system", "content": "You extract structured roofing data from CSI specs."},
             {"role": "user", "content": prompt}
         ]
     )
 
-    return response.choices[0].message.content
+    raw = response.choices[0].message.content.strip()
+
+    # Remove accidental markdown formatting
+    raw = re.sub(r"```json", "", raw)
+    raw = re.sub(r"```", "", raw).strip()
+
+    try:
+        parsed = json.loads(raw)
+        return parsed
+    except Exception:
+        return {
+            "error": "AI returned invalid JSON",
+            "raw_response": raw
+        }
