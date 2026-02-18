@@ -1,24 +1,27 @@
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 from database import engine, SessionLocal
 from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
-from s3_service import upload_file_to_s3, download_file_from_s3
+from s3_service import upload_file_to_s3
 from spec_ai import extract_text_from_pdf, analyze_spec_text
 
+import requests
 import tempfile
-import os
+import json
+
 
 app = FastAPI()
 
 # Create tables
 Base.metadata.create_all(bind=engine)
 
-# =============================
+
+# ==========================================================
 # DATABASE DEPENDENCY
-# =============================
+# ==========================================================
 def get_db():
     db = SessionLocal()
     try:
@@ -26,31 +29,36 @@ def get_db():
     finally:
         db.close()
 
-# =============================
-# Pydantic Schemas
-# =============================
+
+# ==========================================================
+# SCHEMAS
+# ==========================================================
 class UserCreate(BaseModel):
     email: str
     password: str
 
+
 class ProjectCreate(BaseModel):
     project_name: str
     address: str
-    system_type: str
-    roof_area: float
+    system_type: str | None = None
+    roof_area: float | None = None
 
-# =============================
+
+# ==========================================================
 # ROOT
-# =============================
+# ==========================================================
 @app.get("/")
 def root():
     return {"message": "Roof Estimator Backend Running"}
 
-# =============================
+
+# ==========================================================
 # REGISTER
-# =============================
+# ==========================================================
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
+
     existing_user = db.query(User).filter(User.email == user.email).first()
     if existing_user:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -66,11 +74,13 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
 
     return {"message": "User created successfully"}
 
-# =============================
+
+# ==========================================================
 # LOGIN
-# =============================
+# ==========================================================
 @app.post("/login")
 def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+
     user = db.query(User).filter(User.email == form_data.username).first()
 
     if not user or not verify_password(form_data.password, user.password_hash):
@@ -83,33 +93,39 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "token_type": "bearer"
     }
 
-# =============================
+
+# ==========================================================
 # CREATE PROJECT
-# =============================
+# ==========================================================
 @app.post("/projects")
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
+
     new_project = Project(
         project_name=project.project_name,
         address=project.address,
         system_type=project.system_type,
-        roof_area=project.roof_area
+        roof_area=project.roof_area,
+        analysis_status="not_started"
     )
 
     db.add(new_project)
     db.commit()
     db.refresh(new_project)
 
-    return {"message": "Project created successfully"}
+    return {"message": "Project created successfully", "project_id": new_project.id}
 
-# =============================
+
+# ==========================================================
 # LIST PROJECTS
-# =============================
+# ==========================================================
 @app.get("/projects")
 def list_projects(db: Session = Depends(get_db)):
     return db.query(Project).all()
 
+
 @app.get("/projects/{project_id}")
 def get_project(project_id: int, db: Session = Depends(get_db)):
+
     project = db.query(Project).filter(Project.id == project_id).first()
 
     if not project:
@@ -117,9 +133,10 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
 
     return project
 
-# =============================
-# UPLOAD SPEC
-# =============================
+
+# ==========================================================
+# UPLOAD SPEC TO S3
+# ==========================================================
 @app.post("/projects/{project_id}/upload-spec")
 def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
 
@@ -131,6 +148,8 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
     file_url = upload_file_to_s3(file, project_id, "specs")
 
     project.spec_file_url = file_url
+    project.analysis_status = "not_started"
+
     db.commit()
     db.refresh(project)
 
@@ -139,89 +158,63 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
         "file_url": file_url
     }
 
-# =============================
-# ANALYZE SPEC (SECURE S3 DOWNLOAD)
-# =============================
-@app.post("/projects/{project_id}/analyze-spec")
-def analyze_spec(project_id: int, db: Session = Depends(get_db)):
+
+# ==========================================================
+# BACKGROUND ANALYSIS WORKER
+# ==========================================================
+def run_spec_analysis(project_id: int):
+
+    db = SessionLocal()
 
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
 
         if not project or not project.spec_file_url:
-            raise HTTPException(status_code=404, detail="Spec file not found")
+            return
 
-        # Secure download from S3
+        response = requests.get(project.spec_file_url)
+
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            download_file_from_s3(project.spec_file_url, tmp)
+            tmp.write(response.content)
             temp_path = tmp.name
 
-        # Extract PDF text
         spec_text = extract_text_from_pdf(temp_path)
 
-        if not spec_text:
-            return {"error": "No text extracted from PDF"}
+        result = analyze_spec_text(spec_text)
 
-        # Prevent token overload
-        spec_text = spec_text[:8000]
+        project.analysis_result = json.dumps(result)
+        project.analysis_status = "complete"
 
-        # Send to AI
-        ai_result = analyze_spec_text(spec_text)
-
-        return {
-            "project_id": project_id,
-            "analysis": ai_result
-        }
+        db.commit()
 
     except Exception as e:
-        return {"error": str(e)}
+        project.analysis_status = "failed"
+        db.commit()
 
-# =============================
-# TEST OPENAI DIRECT
-# =============================
-@app.get("/test-openai-direct")
-def test_openai_direct():
-    from openai import OpenAI
+    finally:
+        db.close()
 
-    try:
-        key = os.getenv("OPENAI_API_KEY")
-        client = OpenAI(api_key=key)
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": "Say hello."}]
-        )
+# ==========================================================
+# ANALYZE SPEC (NON-BLOCKING)
+# ==========================================================
+@app.post("/projects/{project_id}/analyze-spec")
+def analyze_spec(project_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
 
-        return {
-            "success": True,
-            "response": response.choices[0].message.content
-        }
+    project = db.query(Project).filter(Project.id == project_id).first()
 
-    except Exception as e:
-        return {"success": False, "error": str(e)}
+    if not project or not project.spec_file_url:
+        raise HTTPException(status_code=404, detail="Spec file not found")
 
-# =============================
-# TEST PDF EXTRACTION
-# =============================
-@app.post("/test-pdf")
-def test_pdf(project_id: int, db: Session = Depends(get_db)):
+    if project.analysis_status == "processing":
+        return {"status": "already_processing"}
 
-    try:
-        project = db.query(Project).filter(Project.id == project_id).first()
+    project.analysis_status = "processing"
+    db.commit()
 
-        if not project or not project.spec_file_url:
-            return {"error": "Spec not found"}
+    background_tasks.add_task(run_spec_analysis, project_id)
 
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            download_file_from_s3(project.spec_file_url, tmp)
-            temp_path = tmp.name
-
-        text = extract_text_from_pdf(temp_path)
-
-        return {
-            "text_length": len(text),
-            "preview": text[:500]
-        }
-
-    except Exception as e:
-        return {"error": str(e)}
+    return {
+        "project_id": project_id,
+        "status": "processing"
+    }
