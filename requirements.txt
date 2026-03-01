@@ -11,3 +11,4 @@ python-multipart
 boto3
 pdfplumber
 requests
+pydantic
