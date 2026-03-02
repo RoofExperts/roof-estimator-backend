@@ -16,11 +16,34 @@ MAX_DIVISION_CHARS = 12000  # More than enough; we truncate to 8000 for AI
 # Roofing section numbers (CSI Division 07 sections with actual specs)
 ROOFING_SECTION_PATTERN = r"(?:SECTION\s+)?0?7\s*[2-9]\d\s*\d{2}"
 
+# NON-ROOFING Division 07 subsections to SKIP:
+#   07 1X XX = Dampproofing, Waterproofing
+#   07 2X XX = EIFS, Thermal Insulation (building walls), Air/Vapor Barriers
+#   07 8X XX = Fireproofing, Firestopping
+#   07 9X XX = Joint Sealants
+# ACTUAL ROOFING lives in 07 3X-7X:
+#   07 3X = Shingles/Shakes/Tiles
+#   07 4X = Roof/Wall Panels (metal)
+#   07 5X = Membrane Roofing (TPO, EPDM, PVC, BUR, Mod Bit)
+#   07 6X = Flashing/Sheet Metal
+#   07 7X = Roof Specialties/Accessories
+NON_ROOFING_DIV07_PATTERN = r"SECTION\s+0?7\s*[1289]\d\s*\d{2}\s*-"
+
+# EIFS / non-roofing negative keywords - if a page mentions these, skip it
+EIFS_NEGATIVE_KEYWORDS = [
+    "EIFS", "EXTERIOR INSULATION AND FINISH",
+    "DRYVIT", "STO ", "PAREX", "FINESTONE",
+    "STUCCO", "BASE COAT", "FINISH COAT",
+    "WALL INSULATION", "WALL SYSTEM",
+    "DAMPPROOFING", "FIRESTOPPING", "FIREPROOFING",
+    "JOINT SEALANT",
+]
+
 # TIER 1: Roofing-SPECIFIC keywords (these rarely appear outside roofing sections)
 ROOFING_SPECIFIC_KEYWORDS = [
-    "MEMBRANE", "TPO", "EPDM", "PVC ROOFING", "SINGLE-PLY",
+    "TPO", "EPDM", "PVC ROOFING", "SINGLE-PLY",
     "MODIFIED BITUMEN", "BUILT-UP ROOFING", "ROOF SYSTEM",
-    "ROOFING MEMBRANE", "THERMOPLASTIC", "THERMOSET",
+    "ROOFING MEMBRANE", "THERMOSET",
     "MECHANICALLY ATTACHED", "FULLY ADHERED",
     "CARLISLE", "FIRESTONE", "GAF", "JOHNS MANVILLE",
     "SIKA SARNAFIL", "VERSICO", "TREMCO", "SOPREMA",
@@ -35,9 +58,9 @@ ROOFING_SPECIFIC_KEYWORDS = [
 ROOFING_SUPPORT_KEYWORDS = [
     "ROOFING", "FLASHING", "INSULATION", "THICKNESS",
     "MIL", "WARRANTY", "FASTENER", "ADHESIVE",
-    "WATERPROOFING", "SEALANT", "VAPOR RETARDER",
-    "AIR BARRIER", "R-VALUE", "FM GLOBAL",
-    "MANUFACTURER", "ATTACHMENT",
+    "SEALANT", "VAPOR RETARDER",
+    "R-VALUE", "FM GLOBAL",
+    "MANUFACTURER", "ATTACHMENT", "MEMBRANE",
 ]
 
 
@@ -89,9 +112,27 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 gc.collect()
                 continue
 
-            # Check if page has an actual Division 07 section header (with dash)
+            # Skip non-roofing DIVISION 07 subsections (EIFS, waterproofing, fireproofing, sealants)
+            # These are 07 1X, 07 2X, 07 8X, 07 9X - NOT roofing
+            non_roofing_div07 = re.search(NON_ROOFING_DIV07_PATTERN, text_upper)
+            if non_roofing_div07:
+                print(f"[spec_ai] Skipping page {i+1}: non-roofing Div07 subsection ({non_roofing_div07.group().strip()})")
+                del text, text_upper
+                gc.collect()
+                continue
+
+            # Skip pages with EIFS / wall system negative keywords
+            eifs_hits = [kw for kw in EIFS_NEGATIVE_KEYWORDS if kw in text_upper]
+            if len(eifs_hits) >= 2:
+                print(f"[spec_ai] Skipping page {i+1}: EIFS/wall system content ({eifs_hits})")
+                del text, text_upper
+                gc.collect()
+                continue
+
+            # Check if page has an actual ROOFING Division 07 section header (with dash)
+            # Only 07 3X-7X are roofing sections
             has_div07_header = bool(re.search(
-                r"SECTION\s+0?7\s*[2-9]\d\s*\d{2}\s*-",
+                r"SECTION\s+0?7\s*[3-7]\d\s*\d{2}\s*-",
                 text_upper
             ))
 
