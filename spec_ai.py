@@ -75,24 +75,31 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 gc.collect()
                 continue
 
+            # Skip pages that belong to OTHER CSI divisions (not Division 07)
+            # Pattern matches "SECTION 01XXXX", "SECTION 03XXXX", etc. but NOT "SECTION 07XXXX"
+            non_roofing_section = re.search(r"SECTION\s+0?([0-689]|1[0-9]|[2-9]\d)\s*\d{2,4}", text_upper)
+            has_div07_header = bool(re.search(ROOFING_SECTION_PATTERN, text_upper))
+            if non_roofing_section and not has_div07_header:
+                print(f"[spec_ai] Skipping page {i+1}: belongs to non-roofing division ({non_roofing_section.group()})")
+                del text, text_upper
+                gc.collect()
+                continue
+
             # Count TIER 1 (roofing-specific) keyword hits
             specific_hits = [kw for kw in ROOFING_SPECIFIC_KEYWORDS if kw in text_upper]
             # Count TIER 2 (support) keyword hits
             support_hits = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
 
-            # Check if page has a Division 07 section header like "SECTION 07 52 00"
-            has_section_header = bool(re.search(ROOFING_SECTION_PATTERN, text_upper))
-
             # Page must have at least 1 roofing-SPECIFIC keyword to be collected
             # Then we look at total signal strength:
-            #   - Section header + 1 specific = collect
+            #   - Div 07 section header + 1 specific = collect
             #   - 2+ specific keywords = collect
             #   - 1 specific + 2 support = collect
             has_specific = len(specific_hits) >= 1
             is_spec_page = False
 
             if has_specific:
-                if has_section_header:
+                if has_div07_header:
                     is_spec_page = True
                 elif len(specific_hits) >= 2:
                     is_spec_page = True
@@ -102,12 +109,12 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
             if is_spec_page:
                 collected_pages.append(text)
                 collected_chars += len(text)
-                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, section_header={has_section_header}")
+                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, div07_header={has_div07_header}")
                 print(f"[spec_ai]   First 200 chars: {text[:200]}")
             else:
                 # Log pages that were close but didn't qualify
                 if len(specific_hits) > 0 or len(support_hits) >= 3:
-                    print(f"[spec_ai] Skipping page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, header={has_section_header}")
+                    print(f"[spec_ai] Skipping page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, div07={has_div07_header}")
 
             # Safety limit
             if collected_chars > MAX_DIVISION_CHARS:
