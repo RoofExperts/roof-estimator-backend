@@ -8,7 +8,7 @@ from database import engine, SessionLocal
 from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
-from s3_service import upload_file_to_s3
+from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
 from spec_ai import extract_text_from_pdf, analyze_spec_text
 
 # Phase 1: Condition-based estimating engine
@@ -208,10 +208,12 @@ def proxy_spec_file(project_id: int, db: Session = Depends(get_db)):
     if not project or not project.spec_file_url:
         raise HTTPException(status_code=404, detail="Spec file not found")
     try:
-        response = requests.get(project.spec_file_url, stream=True)
-        response.raise_for_status()
+        from urllib.parse import urlparse
+        parsed = urlparse(project.spec_file_url)
+        s3_key = parsed.path.lstrip("/")
+        s3_obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
         return StreamingResponse(
-            io.BytesIO(response.content),
+            s3_obj["Body"],
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f"inline; filename=spec_{project_id}.pdf",
@@ -219,7 +221,7 @@ def proxy_spec_file(project_id: int, db: Session = Depends(get_db)):
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail="Failed to fetch PDF from storage")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch PDF: {str(e)}")
 
 
 @app.get("/plans/{plan_id}/file")
@@ -229,10 +231,12 @@ def proxy_plan_file(plan_id: int, db: Session = Depends(get_db)):
     if not plan or not plan.file_url:
         raise HTTPException(status_code=404, detail="Plan file not found")
     try:
-        response = requests.get(plan.file_url, stream=True)
-        response.raise_for_status()
+        from urllib.parse import urlparse
+        parsed = urlparse(plan.file_url)
+        s3_key = parsed.path.lstrip("/")
+        s3_obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
         return StreamingResponse(
-            io.BytesIO(response.content),
+            s3_obj["Body"],
             media_type="application/pdf",
             headers={
                 "Content-Disposition": f"inline; filename=plan_{plan_id}.pdf",
@@ -240,4 +244,4 @@ def proxy_plan_file(plan_id: int, db: Session = Depends(get_db)):
             }
         )
     except Exception as e:
-        raise HTTPException(status_code=502, detail="Failed to fetch PDF from storage")
+        raise HTTPException(status_code=502, detail=f"Failed to fetch PDF: {str(e)}")
