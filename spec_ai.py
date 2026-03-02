@@ -10,35 +10,38 @@ from openai import OpenAI
 # MEMORY-EFFICIENT: EXTRACT ONLY DIVISION 07 FROM PDF
 # ==========================================================
 # Process page-by-page to avoid loading entire PDF into memory.
-# Stop as soon as we find Division 07 and reach Division 08.
-MAX_DIVISION_CHARS = 10000  # More than enough; we truncate to 8000 for AI
+# Collect pages with actual roofing spec content (not just TOC).
+MAX_DIVISION_CHARS = 12000  # More than enough; we truncate to 8000 for AI
 
-# Patterns that indicate start of Division 07 / roofing section
-DIV7_START_PATTERNS = [
-    r"DIVISION\s*0?7",           # "DIVISION 07" or "DIVISION 7"
-    r"SECTION\s*07",             # "SECTION 07"
-    r"\b07\s*[0-9]{2}\s*[0-9]{2}",  # CSI section numbers like "07 52 00"
-    r"THERMAL\s+AND\s+MOISTURE", # Division 07 title
-]
+# Roofing section numbers (CSI Division 07 sections with actual specs)
+ROOFING_SECTION_PATTERN = r"(?:SECTION\s+)?0?7\s*[2-9]\d\s*\d{2}"
 
-# Patterns that indicate we've passed Division 07
-DIV7_END_PATTERNS = [
-    r"DIVISION\s*0?8",
-    r"SECTION\s*08",
-    r"\b08\s*[0-9]{2}\s*[0-9]{2}",
-    r"OPENINGS",                 # Division 08 title
+# Keywords that indicate actual roofing spec content (not just a TOC line)
+ROOFING_DETAIL_KEYWORDS = [
+    "MANUFACTURER", "MEMBRANE", "TPO", "EPDM", "PVC", "ROOFING",
+    "INSULATION", "FLASHING", "THICKNESS", "MIL", "WARRANTY",
+    "ATTACHMENT", "FASTENER", "ADHESIVE", "COVER BOARD",
+    "POLYISOCYANURATE", "POLYISO", "MECHANICALLY ATTACHED",
+    "FULLY ADHERED", "CARLISLE", "FIRESTONE", "GAF", "JOHNS MANVILLE",
+    "SIKA SARNAFIL", "VERSICO", "TREMCO", "SOPREMA",
+    "MODIFIED BITUMEN", "BUILT-UP", "SINGLE-PLY", "SHEET METAL",
+    "WATERPROOFING", "SEALANT", "COPING", "COUNTERFLASHING",
+    "ROOF SYSTEM", "VAPOR RETARDER", "AIR BARRIER",
+    "R-VALUE", "THERMAL", "FM GLOBAL", "UL", "ASTM",
 ]
 
 
 def extract_division_7_from_pdf(file_path: str) -> str | None:
     """
-    Extract only Division 07 text from a PDF, page by page.
+    Extract actual Division 07 spec content from a PDF, page by page.
+    Skips table-of-contents pages; collects pages with real roofing details.
     Memory-efficient: only keeps relevant pages in memory.
     """
-    found_div7 = False
-    div7_text = []
+    collected_pages = []
     collected_chars = 0
     total_pages = 0
+    in_div7_zone = False
+    past_toc = False
 
     with pdfplumber.open(file_path) as pdf:
         total_pages = len(pdf.pages)
@@ -51,34 +54,44 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
 
             text_upper = text.upper()
 
-            if not found_div7:
-                # Try each start pattern
-                for pattern in DIV7_START_PATTERNS:
-                    match = re.search(pattern, text_upper)
-                    if match:
-                        found_div7 = True
-                        print(f"[spec_ai] Found Division 07 on page {i+1} via pattern: {pattern}")
-                        print(f"[spec_ai] Match text: {text_upper[match.start():match.start()+60]}")
-                        div7_text.append(text[match.start():])
-                        collected_chars += len(text) - match.start()
+            # Check if we've entered Division 08 zone (stop collecting)
+            if in_div7_zone and past_toc:
+                div8_match = re.search(r"DIVISION\s*0?8|SECTION\s*08\s*\d{2}\s*\d{2}", text_upper)
+                if div8_match:
+                    # Only stop if this page is primarily Division 08 content
+                    div8_keywords = sum(1 for kw in ["DOOR", "WINDOW", "OPENING", "HARDWARE", "GLAZING"] if kw in text_upper)
+                    if div8_keywords >= 1:
+                        print(f"[spec_ai] Hit Division 08 zone on page {i+1}, stopping")
                         break
-            else:
-                # Already inside Division 07 - check for end
-                end_found = False
-                for pattern in DIV7_END_PATTERNS:
-                    end_match = re.search(pattern, text_upper)
-                    if end_match:
-                        div7_text.append(text[:end_match.start()])
-                        print(f"[spec_ai] Found Division 08 boundary on page {i+1}")
-                        end_found = True
-                        break
-                if end_found:
-                    break
-                else:
-                    div7_text.append(text)
-                    collected_chars += len(text)
 
-            # Safety limit: stop if we've collected way more than needed
+            # Check for Division 07 TOC or header page
+            if not in_div7_zone:
+                div7_header = re.search(r"DIVISION\s*0?7|THERMAL\s+AND\s+MOISTURE", text_upper)
+                if div7_header:
+                    in_div7_zone = True
+                    print(f"[spec_ai] Entered Division 07 zone on page {i+1}")
+                    # Don't collect this page yet - it's likely TOC
+
+            # Count how many detail keywords appear on this page
+            detail_hits = sum(1 for kw in ROOFING_DETAIL_KEYWORDS if kw in text_upper)
+
+            # Check if page has a section header like "SECTION 07 52 00"
+            has_section_header = bool(re.search(ROOFING_SECTION_PATTERN, text_upper))
+
+            # Collect this page if it has real roofing spec content
+            # Either: 3+ detail keywords, or a section header + 2+ keywords
+            is_spec_page = (detail_hits >= 3) or (has_section_header and detail_hits >= 2)
+
+            if is_spec_page:
+                if not past_toc:
+                    past_toc = True
+                    print(f"[spec_ai] First real spec content on page {i+1} ({detail_hits} keywords)")
+
+                collected_pages.append(text)
+                collected_chars += len(text)
+                print(f"[spec_ai] Collecting page {i+1}: {detail_hits} keywords, section_header={has_section_header}")
+
+            # Safety limit
             if collected_chars > MAX_DIVISION_CHARS:
                 print(f"[spec_ai] Hit MAX_DIVISION_CHARS limit ({collected_chars} chars)")
                 break
@@ -87,27 +100,26 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
             del text, text_upper
             gc.collect()
 
-    if not div7_text:
-        # Fallback: log first few pages to help debug
-        print(f"[spec_ai] Division 07 NOT FOUND in {total_pages} pages")
-        print(f"[spec_ai] Attempting fallback: scanning for any roofing keywords...")
+    if not collected_pages:
+        print(f"[spec_ai] No roofing spec pages found in {total_pages} pages")
+        print(f"[spec_ai] Trying keyword-only fallback...")
         return _fallback_roofing_extract(file_path)
 
-    result = "\n".join(div7_text)
-    print(f"[spec_ai] Extracted {len(result)} chars of Division 07 text")
-    print(f"[spec_ai] First 200 chars: {result[:200]}")
+    result = "\n".join(collected_pages)
+    print(f"[spec_ai] Extracted {len(result)} chars from {len(collected_pages)} spec pages")
+    print(f"[spec_ai] First 300 chars: {result[:300]}")
     return result
 
 
 def _fallback_roofing_extract(file_path: str) -> str | None:
     """
-    Fallback: if we can't find Division 07 header, look for pages
-    containing roofing keywords and collect those.
+    Fallback: scan every page for roofing keywords and collect matches.
     """
     roofing_keywords = [
         "ROOFING", "MEMBRANE", "TPO", "EPDM", "PVC", "FLASHING",
         "INSULATION", "COVER BOARD", "ROOF SYSTEM", "WATERPROOFING",
         "SHEET METAL", "SEALANT", "07 5", "07 6", "07 7",
+        "MANUFACTURER", "THICKNESS", "WARRANTY", "FASTENER",
     ]
     collected = []
     collected_chars = 0
@@ -119,9 +131,8 @@ def _fallback_roofing_extract(file_path: str) -> str | None:
                 continue
             text_upper = text.upper()
 
-            # Check if this page has roofing-related content
             hits = sum(1 for kw in roofing_keywords if kw in text_upper)
-            if hits >= 2:  # At least 2 keyword matches
+            if hits >= 3:
                 print(f"[spec_ai] Fallback: page {i+1} has {hits} roofing keywords")
                 collected.append(text)
                 collected_chars += len(text)
@@ -181,7 +192,8 @@ def analyze_spec_text_from_pdf(file_path: str):
     prompt = f"""
 You are a professional commercial roofing estimator.
 
-Analyze this CSI Division 07 roofing specification.
+Analyze this CSI Division 07 roofing specification text.
+Extract all roofing details you can find.
 
 Return STRICT VALID JSON ONLY.
 Do not use markdown.
@@ -222,7 +234,7 @@ Specification Text:
     )
 
     raw = response.choices[0].message.content.strip()
-    print(f"[spec_ai] OpenAI raw response: {raw[:300]}")
+    print(f"[spec_ai] OpenAI raw response: {raw[:500]}")
 
     # Remove accidental markdown formatting
     raw = re.sub(r"```json", "", raw)
