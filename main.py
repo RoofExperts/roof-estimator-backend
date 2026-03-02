@@ -219,9 +219,13 @@ def run_spec_analysis(project_id: int):
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project or not project.spec_file_url:
             return
-        response = requests.get(project.spec_file_url)
+        # Use boto3 to download from private S3 bucket
+        from urllib.parse import urlparse
+        parsed = urlparse(project.spec_file_url)
+        s3_key = parsed.path.lstrip("/")
+        s3_obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(response.content)
+            tmp.write(s3_obj["Body"].read())
             temp_path = tmp.name
         spec_text = extract_text_from_pdf(temp_path)
         result = analyze_spec_text(spec_text)
