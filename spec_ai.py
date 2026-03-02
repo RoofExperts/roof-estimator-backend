@@ -72,6 +72,18 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                     print(f"[spec_ai] Entered Division 07 zone on page {i+1}")
                     # Don't collect this page yet - it's likely TOC
 
+            # Skip table-of-contents pages
+            is_toc_page = "TABLE OF CONTENTS" in text_upper
+            # Also detect TOC by counting 6-digit section numbers (042000, 072113, etc.)
+            section_number_count = len(re.findall(r"\b\d{6}\b", text))
+            if not is_toc_page and section_number_count >= 8:
+                is_toc_page = True
+            if is_toc_page:
+                print(f"[spec_ai] Skipping TOC page {i+1} (section_numbers={section_number_count})")
+                del text, text_upper
+                gc.collect()
+                continue
+
             # Count how many detail keywords appear on this page
             detail_hits = sum(1 for kw in ROOFING_DETAIL_KEYWORDS if kw in text_upper)
 
