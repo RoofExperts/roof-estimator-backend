@@ -46,7 +46,7 @@ def upload_file_to_s3(file, project_id: int, folder: str):
         }
     )
 
-    # Store the S3 URL (even though we won’t use public access)
+    # Store the S3 URL (even though we wonât use public access)
     file_url = f"https://{AWS_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
 
     return file_url
