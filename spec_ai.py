@@ -269,33 +269,24 @@ def analyze_spec_text_from_pdf(file_path: str):
     print(f"[spec_ai] Sending {len(division_7_text)} chars to OpenAI")
 
     prompt = f"""
-You are a professional commercial roofing estimator.
+You are a professional commercial roofing estimator analyzing a CSI Division 07 specification.
 
-Analyze this CSI Division 07 roofing specification text.
-Extract all roofing details you can find.
+Extract roofing details into the JSON fields below. Follow these instructions for each field:
 
-Return STRICT VALID JSON ONLY.
-Do not use markdown.
-Do not use backticks.
-Do not explain anything.
+- roof_system_type: The roofing system category (e.g., "Thermoplastic Membrane Roofing", "Modified Bitumen", "Built-Up Roofing", "Metal Roofing")
+- membrane_type: The specific membrane material (e.g., "TPO", "EPDM", "PVC", "KEE", "Modified Bitumen SBS/APP")
+- membrane_thickness: Look for mil thickness (e.g., "60 mil", "80 mil", "45 mil", "115 mil"). Search for patterns like "minimum XX mil" or "XX-mil" or "nominal thickness". This is critical - search the entire text carefully.
+- attachment_method: How the membrane is attached (e.g., "Mechanically Attached", "Fully Adhered", "Ballasted", "Induction Welded"). Look for phrases like "adhered application", "mechanically fastened", etc.
+- insulation_type: The specific insulation material name (e.g., "Polyisocyanurate (Polyiso/ISO)", "Expanded Polystyrene (EPS)", "Extruded Polystyrene (XPS)"). Look for "polyisocyanurate", "polyiso", "ISO board", "rigid insulation" in the roofing context. Do NOT confuse wall/EIFS insulation with roof insulation.
+- insulation_layers: Number of layers and their details. Look for "first layer", "second layer", "base layer", "top layer", R-values, and thicknesses.
+- cover_board: The cover board material and thickness. Look for "cover board", "gypsum", "DensDeck", "HD board", "high-density", "sheathing board" with specific thickness like '1/2"', '5/8"', '1/4"'. Include both material AND thickness (e.g., "1/2 inch Gypsum Cover Board" not just "sheathing").
+- fastening_pattern: How components are fastened to deck. Look for screw patterns, spacing, "mechanically fasten first layer", "rows of fasteners", etc.
+- warranty_years: The warranty period in years. Search for "year warranty", "XX-year", "warranty period", "total system guarantee". Common values: 10, 15, 20, 25, 30 years.
+- manufacturer: List ALL approved manufacturers mentioned. Look for "Carlisle", "Firestone", "GAF", "Johns Manville", "Sika Sarnafil", "Versico", "Tremco", "Soprema", "GenFlex", "Mule-Hide", or any other named roofing manufacturers. Include all that are listed as acceptable.
+- special_requirements: Any special conditions like FM Global, UL ratings, wind uplift, drain coordination, testing requirements, etc.
 
-Format exactly like this:
-
-{{
-  "roof_system_type": "",
-  "membrane_type": "",
-  "membrane_thickness": "",
-  "attachment_method": "",
-  "insulation_type": "",
-  "insulation_layers": "",
-  "cover_board": "",
-  "fastening_pattern": "",
-  "warranty_years": "",
-  "manufacturer": "",
-  "special_requirements": ""
-}}
-
-If a value is not specified, return null.
+Return STRICT VALID JSON ONLY. No markdown, no backticks, no explanation.
+If a value is not found in the text, return null for that field.
 
 Specification Text:
 ----------------------
@@ -305,9 +296,9 @@ Specification Text:
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         temperature=0,
-        max_tokens=600,
+        max_tokens=800,
         messages=[
-            {"role": "system", "content": "You extract structured roofing data from CSI specs."},
+            {"role": "system", "content": "You are an expert at extracting detailed roofing specifications from CSI Division 07 documents. You never miss membrane thickness (mil), warranty years, manufacturer names, or insulation types. You read every line carefully."},
             {"role": "user", "content": prompt}
         ]
     )
