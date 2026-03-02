@@ -202,7 +202,7 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    file_url = upload_file_to_s3(file.file, file.filename, f"projects/{project_id}/specs")
+    file_url = upload_file_to_s3(file, project_id, "specs")
     project.spec_file_url = file_url
     project.analysis_status = "not_started"
     db.commit()
