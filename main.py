@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 from database import engine, SessionLocal
@@ -22,6 +23,7 @@ from vision_router import router as vision_router
 import requests
 import tempfile
 import json
+import io
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -37,15 +39,13 @@ async def lifespan(app: FastAPI):
         db.close()
     yield
 
-
 app = FastAPI(
-    title="Commercial Roofing Estimating API",
-    description="AI-powered roofing specification analysis, condition-based estimating, and vision plan reading",
+    title="Roof Estimator API",
+    description="Commercial roofing estimation system with AI-powered plan reading",
     version="2.0.0",
     lifespan=lifespan
 )
 
-# CORS middleware for frontend access
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -84,18 +84,15 @@ class ProjectCreate(BaseModel):
 
 @app.get("/")
 def root():
-    return {"message": "Roof Estimator Backend Running"}
+    return {"message": "Roof Estimator API v2.0.0", "status": "running"}
 
 
 @app.post("/register")
 def register(user: UserCreate, db: Session = Depends(get_db)):
-    existing_user = db.query(User).filter(User.email == user.email).first()
-    if existing_user:
+    existing = db.query(User).filter(User.email == user.email).first()
+    if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
-    new_user = User(
-        email=user.email,
-        password_hash=hash_password(user.password)
-    )
+    new_user = User(email=user.email, password_hash=hash_password(user.password))
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -131,14 +128,22 @@ def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
 
 @app.get("/projects")
 def list_projects(db: Session = Depends(get_db)):
-    return db.query(Project).all()
+    projects = db.query(Project).all()
+    return [{"id": p.id, "project_name": p.project_name, "address": p.address,
+             "system_type": p.system_type, "roof_area": p.roof_area,
+             "spec_file_url": p.spec_file_url, "analysis_status": p.analysis_status,
+             "analysis_result": p.analysis_result} for p in projects]
+
 
 @app.get("/projects/{project_id}")
 def get_project(project_id: int, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    return project
+    return {"id": project.id, "project_name": project.project_name, "address": project.address,
+            "system_type": project.system_type, "roof_area": project.roof_area,
+            "spec_file_url": project.spec_file_url, "analysis_status": project.analysis_status,
+            "analysis_result": project.analysis_result}
 
 
 @app.post("/projects/{project_id}/upload-spec")
@@ -146,7 +151,7 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    file_url = upload_file_to_s3(file, project_id, "specs")
+    file_url = upload_file_to_s3(file.file, file.filename, f"projects/{project_id}/specs")
     project.spec_file_url = file_url
     project.analysis_status = "not_started"
     db.commit()
@@ -193,3 +198,46 @@ def analyze_spec(project_id: int, background_tasks: BackgroundTasks, db: Session
         "project_id": project_id,
         "status": "processing"
     }
+
+
+# PDF Proxy endpoints - serve PDFs through backend to avoid S3 CORS issues
+@app.get("/projects/{project_id}/spec-file")
+def proxy_spec_file(project_id: int, db: Session = Depends(get_db)):
+    """Proxy the spec PDF file from S3 to avoid CORS issues."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project or not project.spec_file_url:
+        raise HTTPException(status_code=404, detail="Spec file not found")
+    try:
+        response = requests.get(project.spec_file_url, stream=True)
+        response.raise_for_status()
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"inline; filename=spec_{project_id}.pdf",
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Failed to fetch PDF from storage")
+
+
+@app.get("/plans/{plan_id}/file")
+def proxy_plan_file(plan_id: int, db: Session = Depends(get_db)):
+    """Proxy plan PDF file from S3 to avoid CORS issues."""
+    plan = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_id).first()
+    if not plan or not plan.file_url:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+    try:
+        response = requests.get(plan.file_url, stream=True)
+        response.raise_for_status()
+        return StreamingResponse(
+            io.BytesIO(response.content),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"inline; filename=plan_{plan_id}.pdf",
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail="Failed to fetch PDF from storage")
