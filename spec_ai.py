@@ -27,7 +27,7 @@ ROOFING_SECTION_PATTERN = r"(?:SECTION\s+)?0?7\s*[2-9]\d\s*\d{2}"
 #   07 5X = Membrane Roofing (TPO, EPDM, PVC, BUR, Mod Bit)
 #   07 6X = Flashing/Sheet Metal
 #   07 7X = Roof Specialties/Accessories
-NON_ROOFING_DIV07_PATTERN = r"SECTION\s+0?7\s*[1289]\d\s*\d{2}\s*-"
+NON_ROOFING_DIV07_PATTERN = r"SECTION\s+0?7\s*[1289]\d\s*\d{2}\s*[\-\u2013\u2014]"
 
 # EIFS / non-roofing negative keywords - if a page mentions these, skip it
 EIFS_NEGATIVE_KEYWORDS = [
@@ -99,11 +99,12 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 continue
 
             # Skip pages whose PRIMARY section is NOT Division 07
-            # Full section headers have a dash: "SECTION 061000 - ROUGH CARPENTRY"
+            # Full section headers have a dash/en-dash: "SECTION 061000 - ROUGH CARPENTRY"
+            # or "SECTION 061000 â ROUGH CARPENTRY" (en-dash from PDF)
             # Cross-references are just: "Section 07 52 00" (no dash)
-            # If we find a non-Div07 section HEADER (with dash), skip the page
+            # Match divisions 01-06, 08-49 (i.e., NOT 07)
             non_roofing_header = re.search(
-                r"SECTION\s+0?([0-689]|1[0-9]|[2-9]\d)\s*\d{2,4}\s*-",
+                r"SECTION\s+(0[0-689]|[1-9]\d)\s*\d{4}\s*[\-\u2013\u2014]",
                 text_upper
             )
             if non_roofing_header:
@@ -129,10 +130,10 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 gc.collect()
                 continue
 
-            # Check if page has an actual ROOFING Division 07 section header (with dash)
+            # Check if page has an actual ROOFING Division 07 section header (with dash/en-dash)
             # Only 07 3X-7X are roofing sections
             has_div07_header = bool(re.search(
-                r"SECTION\s+0?7\s*[3-7]\d\s*\d{2}\s*-",
+                r"SECTION\s+0?7\s*[3-7]\d\s*\d{2}\s*[\-\u2013\u2014]",
                 text_upper
             ))
 
