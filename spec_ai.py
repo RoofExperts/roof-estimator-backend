@@ -75,15 +75,25 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 gc.collect()
                 continue
 
-            # Skip pages that belong to OTHER CSI divisions (not Division 07)
-            # Pattern matches "SECTION 01XXXX", "SECTION 03XXXX", etc. but NOT "SECTION 07XXXX"
-            non_roofing_section = re.search(r"SECTION\s+0?([0-689]|1[0-9]|[2-9]\d)\s*\d{2,4}", text_upper)
-            has_div07_header = bool(re.search(ROOFING_SECTION_PATTERN, text_upper))
-            if non_roofing_section and not has_div07_header:
-                print(f"[spec_ai] Skipping page {i+1}: belongs to non-roofing division ({non_roofing_section.group()})")
+            # Skip pages whose PRIMARY section is NOT Division 07
+            # Full section headers have a dash: "SECTION 061000 - ROUGH CARPENTRY"
+            # Cross-references are just: "Section 07 52 00" (no dash)
+            # If we find a non-Div07 section HEADER (with dash), skip the page
+            non_roofing_header = re.search(
+                r"SECTION\s+0?([0-689]|1[0-9]|[2-9]\d)\s*\d{2,4}\s*-",
+                text_upper
+            )
+            if non_roofing_header:
+                print(f"[spec_ai] Skipping page {i+1}: primary section is non-roofing ({non_roofing_header.group().strip()})")
                 del text, text_upper
                 gc.collect()
                 continue
+
+            # Check if page has an actual Division 07 section header (with dash)
+            has_div07_header = bool(re.search(
+                r"SECTION\s+0?7\s*[2-9]\d\s*\d{2}\s*-",
+                text_upper
+            ))
 
             # Count TIER 1 (roofing-specific) keyword hits
             specific_hits = [kw for kw in ROOFING_SPECIFIC_KEYWORDS if kw in text_upper]
