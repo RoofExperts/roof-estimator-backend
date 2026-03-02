@@ -171,9 +171,30 @@ def delete_project(project_id: int, db: Session = Depends(get_db)):
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    # Delete all related records in correct order to respect FK constraints
+    # 1. EstimateLineItems (FK to projects + conditions)
+    db.query(EstimateLineItem).filter(EstimateLineItem.project_id == project_id).delete()
+
+    # 2. Get plan file IDs for this project
+    plan_file_ids = [p.id for p in db.query(RoofPlanFile).filter(RoofPlanFile.project_id == project_id).all()]
+
+    if plan_file_ids:
+        # 3. VisionExtractions (FK to plan_files)
+        db.query(VisionExtraction).filter(VisionExtraction.plan_file_id.in_(plan_file_ids)).delete(synchronize_session='fetch')
+        # 4. PlanPageAnalysis (FK to plan_files)
+        db.query(PlanPageAnalysis).filter(PlanPageAnalysis.plan_file_id.in_(plan_file_ids)).delete(synchronize_session='fetch')
+
+    # 5. RoofPlanFiles (FK to projects)
+    db.query(RoofPlanFile).filter(RoofPlanFile.project_id == project_id).delete()
+
+    # 6. RoofConditions (FK to projects)
+    db.query(RoofCondition).filter(RoofCondition.project_id == project_id).delete()
+
+    # 7. Finally delete the project
     db.delete(project)
     db.commit()
-    return {"message": "Project deleted successfully"}
+    return {"message": "Project and all related data deleted successfully"}
 
 
 @app.post("/projects/{project_id}/upload-spec")
