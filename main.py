@@ -24,6 +24,7 @@ import requests
 import tempfile
 import json
 import io
+import os
 
 # Create tables
 Base.metadata.create_all(bind=engine)
@@ -215,17 +216,17 @@ def upload_spec(project_id: int, file: UploadFile = File(...), db: Session = Dep
 
 def run_spec_analysis(project_id: int):
     db = SessionLocal()
+    temp_path = None
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project or not project.spec_file_url:
             return
-        # Use boto3 to download from private S3 bucket
+        # Use boto3 to stream download from private S3 bucket (memory-efficient)
         from urllib.parse import urlparse
         parsed = urlparse(project.spec_file_url)
         s3_key = parsed.path.lstrip("/")
-        s3_obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(s3_obj["Body"].read())
+            s3_client.download_fileobj(AWS_BUCKET_NAME, s3_key, tmp)
             temp_path = tmp.name
         spec_text = extract_text_from_pdf(temp_path)
         result = analyze_spec_text(spec_text)
@@ -236,6 +237,8 @@ def run_spec_analysis(project_id: int):
         project.analysis_status = "failed"
         db.commit()
     finally:
+        if temp_path and os.path.exists(temp_path):
+            os.unlink(temp_path)
         db.close()
 
 
