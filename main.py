@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
 from spec_ai import extract_text_from_pdf, analyze_spec_text
 
-# Phase 1: Condition-based estimating engine
+# Phase 1: Condition-based estimating engineh
 from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
 from conditions_router import router as conditions_router
 from seed_data import seed_database
@@ -228,11 +228,11 @@ def proxy_spec_file(project_id: int, db: Session = Depends(get_db)):
 def proxy_plan_file(plan_id: int, db: Session = Depends(get_db)):
     """Proxy plan PDF file from S3 to avoid CORS issues."""
     plan = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_id).first()
-    if not plan or not plan.file_url:
+    if not plan or not plan.s3_key:
         raise HTTPException(status_code=404, detail="Plan file not found")
     try:
         from urllib.parse import urlparse
-        parsed = urlparse(plan.file_url)
+        parsed = urlparse(plan.s3_key)
         s3_key = parsed.path.lstrip("/")
         s3_obj = s3_client.get_object(Bucket=AWS_BUCKET_NAME, Key=s3_key)
         return StreamingResponse(
