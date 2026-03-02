@@ -16,18 +16,28 @@ MAX_DIVISION_CHARS = 12000  # More than enough; we truncate to 8000 for AI
 # Roofing section numbers (CSI Division 07 sections with actual specs)
 ROOFING_SECTION_PATTERN = r"(?:SECTION\s+)?0?7\s*[2-9]\d\s*\d{2}"
 
-# Keywords that indicate actual roofing spec content (not just a TOC line)
-ROOFING_DETAIL_KEYWORDS = [
-    "MANUFACTURER", "MEMBRANE", "TPO", "EPDM", "PVC", "ROOFING",
-    "INSULATION", "FLASHING", "THICKNESS", "MIL", "WARRANTY",
-    "ATTACHMENT", "FASTENER", "ADHESIVE", "COVER BOARD",
-    "POLYISOCYANURATE", "POLYISO", "MECHANICALLY ATTACHED",
-    "FULLY ADHERED", "CARLISLE", "FIRESTONE", "GAF", "JOHNS MANVILLE",
+# TIER 1: Roofing-SPECIFIC keywords (these rarely appear outside roofing sections)
+ROOFING_SPECIFIC_KEYWORDS = [
+    "MEMBRANE", "TPO", "EPDM", "PVC ROOFING", "SINGLE-PLY",
+    "MODIFIED BITUMEN", "BUILT-UP ROOFING", "ROOF SYSTEM",
+    "ROOFING MEMBRANE", "THERMOPLASTIC", "THERMOSET",
+    "MECHANICALLY ATTACHED", "FULLY ADHERED",
+    "CARLISLE", "FIRESTONE", "GAF", "JOHNS MANVILLE",
     "SIKA SARNAFIL", "VERSICO", "TREMCO", "SOPREMA",
-    "MODIFIED BITUMEN", "BUILT-UP", "SINGLE-PLY", "SHEET METAL",
-    "WATERPROOFING", "SEALANT", "COPING", "COUNTERFLASHING",
-    "ROOF SYSTEM", "VAPOR RETARDER", "AIR BARRIER",
-    "R-VALUE", "THERMAL", "FM GLOBAL", "UL", "ASTM",
+    "COVER BOARD", "POLYISOCYANURATE", "POLYISO",
+    "ROOF INSULATION", "TAPERED INSULATION",
+    "COPING", "COUNTERFLASHING", "ROOF DECK",
+    "FLASHING AND SHEET METAL", "METAL ROOFING",
+    "07 52", "07 54", "07 55", "07 61", "07 62", "07 72",
+]
+
+# TIER 2: Supporting keywords (common in roofing BUT also in other divisions)
+ROOFING_SUPPORT_KEYWORDS = [
+    "ROOFING", "FLASHING", "INSULATION", "THICKNESS",
+    "MIL", "WARRANTY", "FASTENER", "ADHESIVE",
+    "WATERPROOFING", "SEALANT", "VAPOR RETARDER",
+    "AIR BARRIER", "R-VALUE", "FM GLOBAL",
+    "MANUFACTURER", "ATTACHMENT",
 ]
 
 
@@ -35,13 +45,12 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
     """
     Extract actual Division 07 spec content from a PDF, page by page.
     Skips table-of-contents pages; collects pages with real roofing details.
+    Uses two-tier keyword system: roofing-specific + support keywords.
     Memory-efficient: only keeps relevant pages in memory.
     """
     collected_pages = []
     collected_chars = 0
     total_pages = 0
-    in_div7_zone = False
-    past_toc = False
 
     with pdfplumber.open(file_path) as pdf:
         total_pages = len(pdf.pages)
@@ -53,24 +62,6 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 continue
 
             text_upper = text.upper()
-
-            # Check if we've entered Division 08 zone (stop collecting)
-            if in_div7_zone and past_toc:
-                div8_match = re.search(r"DIVISION\s*0?8|SECTION\s*08\s*\d{2}\s*\d{2}", text_upper)
-                if div8_match:
-                    # Only stop if this page is primarily Division 08 content
-                    div8_keywords = sum(1 for kw in ["DOOR", "WINDOW", "OPENING", "HARDWARE", "GLAZING"] if kw in text_upper)
-                    if div8_keywords >= 1:
-                        print(f"[spec_ai] Hit Division 08 zone on page {i+1}, stopping")
-                        break
-
-            # Check for Division 07 TOC or header page
-            if not in_div7_zone:
-                div7_header = re.search(r"DIVISION\s*0?7|THERMAL\s+AND\s+MOISTURE", text_upper)
-                if div7_header:
-                    in_div7_zone = True
-                    print(f"[spec_ai] Entered Division 07 zone on page {i+1}")
-                    # Don't collect this page yet - it's likely TOC
 
             # Skip table-of-contents pages
             is_toc_page = "TABLE OF CONTENTS" in text_upper
@@ -84,24 +75,39 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 gc.collect()
                 continue
 
-            # Count how many detail keywords appear on this page
-            detail_hits = sum(1 for kw in ROOFING_DETAIL_KEYWORDS if kw in text_upper)
+            # Count TIER 1 (roofing-specific) keyword hits
+            specific_hits = [kw for kw in ROOFING_SPECIFIC_KEYWORDS if kw in text_upper]
+            # Count TIER 2 (support) keyword hits
+            support_hits = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
 
-            # Check if page has a section header like "SECTION 07 52 00"
+            # Check if page has a Division 07 section header like "SECTION 07 52 00"
             has_section_header = bool(re.search(ROOFING_SECTION_PATTERN, text_upper))
 
-            # Collect this page if it has real roofing spec content
-            # Either: 3+ detail keywords, or a section header + 2+ keywords
-            is_spec_page = (detail_hits >= 3) or (has_section_header and detail_hits >= 2)
+            # Page must have at least 1 roofing-SPECIFIC keyword to be collected
+            # Then we look at total signal strength:
+            #   - Section header + 1 specific = collect
+            #   - 2+ specific keywords = collect
+            #   - 1 specific + 2 support = collect
+            has_specific = len(specific_hits) >= 1
+            is_spec_page = False
+
+            if has_specific:
+                if has_section_header:
+                    is_spec_page = True
+                elif len(specific_hits) >= 2:
+                    is_spec_page = True
+                elif len(specific_hits) >= 1 and len(support_hits) >= 2:
+                    is_spec_page = True
 
             if is_spec_page:
-                if not past_toc:
-                    past_toc = True
-                    print(f"[spec_ai] First real spec content on page {i+1} ({detail_hits} keywords)")
-
                 collected_pages.append(text)
                 collected_chars += len(text)
-                print(f"[spec_ai] Collecting page {i+1}: {detail_hits} keywords, section_header={has_section_header}")
+                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, section_header={has_section_header}")
+                print(f"[spec_ai]   First 200 chars: {text[:200]}")
+            else:
+                # Log pages that were close but didn't qualify
+                if len(specific_hits) > 0 or len(support_hits) >= 3:
+                    print(f"[spec_ai] Skipping page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, header={has_section_header}")
 
             # Safety limit
             if collected_chars > MAX_DIVISION_CHARS:
@@ -114,7 +120,7 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
 
     if not collected_pages:
         print(f"[spec_ai] No roofing spec pages found in {total_pages} pages")
-        print(f"[spec_ai] Trying keyword-only fallback...")
+        print(f"[spec_ai] Trying fallback with relaxed criteria...")
         return _fallback_roofing_extract(file_path)
 
     result = "\n".join(collected_pages)
@@ -125,13 +131,14 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
 
 def _fallback_roofing_extract(file_path: str) -> str | None:
     """
-    Fallback: scan every page for roofing keywords and collect matches.
+    Fallback: scan every page for roofing-specific keywords and collect matches.
+    More relaxed than primary but still requires roofing-specific terms.
     """
-    roofing_keywords = [
-        "ROOFING", "MEMBRANE", "TPO", "EPDM", "PVC", "FLASHING",
-        "INSULATION", "COVER BOARD", "ROOF SYSTEM", "WATERPROOFING",
-        "SHEET METAL", "SEALANT", "07 5", "07 6", "07 7",
-        "MANUFACTURER", "THICKNESS", "WARRANTY", "FASTENER",
+    fallback_keywords = [
+        "ROOFING", "MEMBRANE", "TPO", "EPDM", "PVC",
+        "SINGLE-PLY", "ROOF SYSTEM", "FLASHING",
+        "COVER BOARD", "ROOF DECK", "COPING",
+        "07 52", "07 54", "07 55", "07 61", "07 62",
     ]
     collected = []
     collected_chars = 0
@@ -143,9 +150,9 @@ def _fallback_roofing_extract(file_path: str) -> str | None:
                 continue
             text_upper = text.upper()
 
-            hits = sum(1 for kw in roofing_keywords if kw in text_upper)
-            if hits >= 3:
-                print(f"[spec_ai] Fallback: page {i+1} has {hits} roofing keywords")
+            hits = [kw for kw in fallback_keywords if kw in text_upper]
+            if len(hits) >= 2:
+                print(f"[spec_ai] Fallback: page {i+1} matched {hits}")
                 collected.append(text)
                 collected_chars += len(text)
 
@@ -161,6 +168,7 @@ def _fallback_roofing_extract(file_path: str) -> str | None:
 
     result = "\n".join(collected)
     print(f"[spec_ai] Fallback collected {len(result)} chars from {len(collected)} pages")
+    print(f"[spec_ai] Fallback first 300 chars: {result[:300]}")
     return result
 
 
