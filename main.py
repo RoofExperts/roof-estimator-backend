@@ -81,6 +81,12 @@ class ProjectCreate(BaseModel):
     system_type: str | None = None
     roof_area: float | None = None
 
+class ProjectUpdate(BaseModel):
+    project_name: str | None = None
+    address: str | None = None
+    system_type: str | None = None
+    roof_area: float | None = None
+
 
 @app.get("/")
 def root():
@@ -144,6 +150,30 @@ def get_project(project_id: int, db: Session = Depends(get_db)):
             "system_type": project.system_type, "roof_area": project.roof_area,
             "spec_file_url": project.spec_file_url, "analysis_status": project.analysis_status,
             "analysis_result": project.analysis_result}
+
+
+@app.put("/projects/{project_id}")
+def update_project(project_id: int, updates: ProjectUpdate, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    update_data = updates.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        if value is not None:
+            setattr(project, key, value)
+    db.commit()
+    db.refresh(project)
+    return {"message": "Project updated successfully", "project_id": project.id}
+
+
+@app.delete("/projects/{project_id}")
+def delete_project(project_id: int, db: Session = Depends(get_db)):
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    db.delete(project)
+    db.commit()
+    return {"message": "Project deleted successfully"}
 
 
 @app.post("/projects/{project_id}/upload-spec")
