@@ -9,7 +9,7 @@ from models import Base, User, Project
 from auth import hash_password, verify_password, create_access_token
 from pydantic import BaseModel
 from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
-from spec_ai import extract_text_from_pdf, analyze_spec_text
+from spec_ai import analyze_spec_text_from_pdf
 
 # Phase 1: Condition-based estimating engineh
 from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
@@ -228,8 +228,7 @@ def run_spec_analysis(project_id: int):
         with tempfile.NamedTemporaryFile(delete=False) as tmp:
             s3_client.download_fileobj(AWS_BUCKET_NAME, s3_key, tmp)
             temp_path = tmp.name
-        spec_text = extract_text_from_pdf(temp_path)
-        result = analyze_spec_text(spec_text)
+        result = analyze_spec_text_from_pdf(temp_path)
         project.analysis_result = json.dumps(result)
         project.analysis_status = "complete"
         db.commit()
