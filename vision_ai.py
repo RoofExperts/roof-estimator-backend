@@ -4,9 +4,9 @@ Converts PDF pages to images, sends to GPT-4o vision, extracts measurements,
 and auto-creates RoofCondition records.
 
 Page-type-aware extraction:
-  - Slab Plan → roof area (L×W), parapet wall (lnft), coping (lnft)
-  - Roof Plan → roof drains (ea), scuppers (ea), pitch pans (ea), pipes (ea), curbs (lnft)
-  - Elevations → parapet flashing height (in), collector heads (ea), downspouts (lnft)
+  - Slab Plan â roof area (LÃW), parapet wall (lnft), coping (lnft)
+  - Roof Plan â roof drains (ea), scuppers (ea), pitch pans (ea), pipes (ea), curbs (lnft)
+  - Elevations â parapet flashing height (in), collector heads (ea), downspouts (lnft)
 """
 
 import os
@@ -115,7 +115,7 @@ def extract_measurements_for_page(image_base64: str, page_type: str, scale_info:
 
 
 # ======================================================================
-# Extraction type → RoofCondition mapping
+# Extraction type â RoofCondition mapping
 # ======================================================================
 
 EXTRACTION_TO_CONDITION = {
@@ -138,6 +138,20 @@ EXTRACTION_TO_CONDITION = {
     "parapet_flashing_high": {"condition_type": "edge_detail", "unit": "inches"},
     "collector_head": {"condition_type": "custom", "unit": "each"},
     "downspout": {"condition_type": "custom", "unit": "lnft"},
+
+    # GPT-4o name variations (aliases)
+    "building_area": {"condition_type": "field", "unit": "sqft"},
+    "building_dimensions": {"condition_type": "field", "unit": "sqft"},
+    "roof_drains": {"condition_type": "custom", "unit": "each"},
+    "scuppers": {"condition_type": "custom", "unit": "each"},
+    "pitch_pans": {"condition_type": "custom", "unit": "each"},
+    "pipes": {"condition_type": "penetration", "unit": "each"},
+    "curbs": {"condition_type": "penetration", "unit": "lnft"},
+    "parapet_flashing_height": {"condition_type": "edge_detail", "unit": "inches"},
+    "collector_heads": {"condition_type": "custom", "unit": "each"},
+    "downspouts": {"condition_type": "custom", "unit": "lnft"},
+    "rooftop_equipment": {"condition_type": "penetration", "unit": "each"},
+    "rooftop_equipment_count": {"condition_type": "penetration", "unit": "each"},
 
     # Legacy types (still supported from older extractions)
     "perimeter": {"condition_type": "perimeter", "unit": "lnft"},
@@ -192,7 +206,7 @@ def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> l
 
 # Page types that are useful for extraction, in priority order
 EXTRACTABLE_PAGE_TYPES = [
-    "slab_plan",    # Building dimensions → roof area, parapet wall, coping
+    "slab_plan",    # Building dimensions â roof area, parapet wall, coping
     "roof_plan",    # Drains, scuppers, pitch pans, pipes, curbs
     "elevation",    # Parapet flashing, collector heads, downspouts
     "floor_plan",   # May have building dimensions like slab plan
