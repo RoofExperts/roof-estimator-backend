@@ -11,7 +11,7 @@ from typing import Optional, List
 
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
-from conditions_models import RoofCondition
+from conditions_models import RoofCondition, EstimateLineItem
 from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
 
@@ -105,6 +105,10 @@ def reanalyze_plan(
     ).all()
     for ext in extractions:
         if ext.condition_id:
+            # Delete any estimate line items linked to this condition first
+            db.query(EstimateLineItem).filter(
+                EstimateLineItem.condition_id == ext.condition_id
+            ).delete()
             cond = db.query(RoofCondition).filter(RoofCondition.id == ext.condition_id).first()
             if cond:
                 db.delete(cond)
