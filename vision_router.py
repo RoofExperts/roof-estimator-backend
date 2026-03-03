@@ -1,16 +1,18 @@
 """
 FastAPI endpoints for the AI Vision Plan Reader.
 """
+
 import os
 import tempfile
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
+
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from conditions_models import RoofCondition
-from s3_service import upload_file_to_s3
+from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
 
 router = APIRouter(prefix="/api/v1", tags=["vision-plan-reader"])
@@ -82,6 +84,68 @@ def upload_plan(
     }
 
 
+@router.post("/plan-files/{plan_file_id}/reanalyze")
+def reanalyze_plan(
+    plan_file_id: int,
+    background_tasks: BackgroundTasks = None,
+    db: Session = Depends(get_db),
+):
+    """Re-run AI analysis on an existing plan file.
+
+    Downloads the PDF from S3, clears previous analysis results,
+    and re-runs the full vision analysis pipeline.
+    """
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    # Clear existing extractions and their linked conditions
+    extractions = db.query(VisionExtraction).filter(
+        VisionExtraction.plan_file_id == plan_file_id
+    ).all()
+    for ext in extractions:
+        if ext.condition_id:
+            cond = db.query(RoofCondition).filter(RoofCondition.id == ext.condition_id).first()
+            if cond:
+                db.delete(cond)
+        db.delete(ext)
+
+    # Clear existing page analyses
+    db.query(PlanPageAnalysis).filter(
+        PlanPageAnalysis.plan_file_id == plan_file_id
+    ).delete()
+
+    # Reset plan file status
+    plan_file.upload_status = "pending"
+    plan_file.detected_scale = None
+    plan_file.scale_confidence = None
+    plan_file.error_message = None
+    db.commit()
+
+    # Download file from S3 to temp location
+    temp_dir = tempfile.mkdtemp()
+    temp_path = os.path.join(temp_dir, plan_file.file_name)
+    with open(temp_path, "wb") as f:
+        download_file_from_s3(plan_file.s3_key, f)
+
+    project_id = plan_file.project_id
+
+    if background_tasks:
+        background_tasks.add_task(
+            run_plan_analysis_background,
+            project_id, plan_file.id, temp_path,
+        )
+    else:
+        from vision_ai import run_plan_analysis
+        run_plan_analysis(project_id, plan_file.id, temp_path, db)
+
+    return {
+        "message": "Re-analysis started in background.",
+        "plan_file_id": plan_file.id,
+        "status": "pending",
+    }
+
+
 @router.get("/projects/{project_id}/plan-files")
 def list_plan_files(project_id: int, db: Session = Depends(get_db)):
     """List all uploaded plan files for a project."""
@@ -96,16 +160,21 @@ def get_plan_file(plan_file_id: int, db: Session = Depends(get_db)):
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
         raise HTTPException(status_code=404, detail="Plan file not found")
+
     pages = db.query(PlanPageAnalysis).filter(
         PlanPageAnalysis.plan_file_id == plan_file_id
     ).order_by(PlanPageAnalysis.page_number).all()
+
     extractions = db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id
     ).all()
+
     return {
         "plan_file": {
-            "id": plan_file.id, "project_id": plan_file.project_id,
-            "file_name": plan_file.file_name, "file_type": plan_file.file_type,
+            "id": plan_file.id,
+            "project_id": plan_file.project_id,
+            "file_name": plan_file.file_name,
+            "file_type": plan_file.file_type,
             "upload_status": plan_file.upload_status,
             "page_count": plan_file.page_count,
             "detected_scale": plan_file.detected_scale,
@@ -122,6 +191,7 @@ def get_plan_file(plan_file_id: int, db: Session = Depends(get_db)):
                          "condition_id": e.condition_id} for e in extractions],
     }
 
+
 @router.get("/plan-files/{plan_file_id}/extractions")
 def get_extractions(plan_file_id: int, db: Session = Depends(get_db)):
     """List all extracted measurements for a plan file."""
@@ -136,12 +206,14 @@ def update_extraction(extraction_id: int, update: ExtractionUpdate, db: Session 
     extraction = db.query(VisionExtraction).filter(VisionExtraction.id == extraction_id).first()
     if not extraction:
         raise HTTPException(status_code=404, detail="Extraction not found")
+
     if update.measurement_value is not None:
         extraction.measurement_value = update.measurement_value
     if update.measurement_unit is not None:
         extraction.measurement_unit = update.measurement_unit
     if update.notes is not None:
         extraction.notes = update.notes
+
     # Also update linked condition if it exists
     if extraction.condition_id:
         condition = db.query(RoofCondition).filter(RoofCondition.id == extraction.condition_id).first()
@@ -150,10 +222,13 @@ def update_extraction(extraction_id: int, update: ExtractionUpdate, db: Session 
                 condition.measurement_value = update.measurement_value
             if update.measurement_unit is not None:
                 condition.measurement_unit = update.measurement_unit
+
     db.commit()
     db.refresh(extraction)
+
     return {"message": "Extraction updated", "extraction_id": extraction.id,
-            "measurement_value": extraction.measurement_value, "measurement_unit": extraction.measurement_unit}
+            "measurement_value": extraction.measurement_value,
+            "measurement_unit": extraction.measurement_unit}
 
 
 @router.delete("/extractions/{extraction_id}")
@@ -162,10 +237,12 @@ def delete_extraction(extraction_id: int, db: Session = Depends(get_db)):
     extraction = db.query(VisionExtraction).filter(VisionExtraction.id == extraction_id).first()
     if not extraction:
         raise HTTPException(status_code=404, detail="Extraction not found")
+
     if extraction.condition_id:
         condition = db.query(RoofCondition).filter(RoofCondition.id == extraction.condition_id).first()
         if condition:
             db.delete(condition)
+
     db.delete(extraction)
     db.commit()
     return {"message": "Extraction and linked condition deleted", "extraction_id": extraction_id}
@@ -177,6 +254,7 @@ def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db)):
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
         raise HTTPException(status_code=404, detail="Plan file not found")
+
     extractions = db.query(VisionExtraction).filter(VisionExtraction.plan_file_id == plan_file_id).all()
     for ext in extractions:
         if ext.condition_id:
@@ -185,8 +263,10 @@ def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db)):
                 db.delete(old_cond)
             ext.condition_id = None
     db.commit()
+
     created_ids = auto_create_conditions(plan_file.project_id, plan_file_id, db)
-    return {"message": f"Regenerated {len(created_ids)} conditions", "conditions_created": len(created_ids),
+    return {"message": f"Regenerated {len(created_ids)} conditions",
+            "conditions_created": len(created_ids),
             "condition_ids": created_ids}
 
 
@@ -196,9 +276,11 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db)):
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
         raise HTTPException(status_code=404, detail="Plan file not found")
+
     extraction_count = db.query(VisionExtraction).filter(VisionExtraction.plan_file_id == plan_file_id).count()
     condition_count = db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id, VisionExtraction.condition_id.isnot(None)).count()
+
     return {"plan_file_id": plan_file_id, "status": plan_file.upload_status,
             "page_count": plan_file.page_count, "detected_scale": plan_file.detected_scale,
             "extractions_count": extraction_count, "conditions_created": condition_count,
