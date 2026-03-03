@@ -16,8 +16,8 @@ Classify this page into one of the following types:
 - elevation: Shows a side view of the building (may show roof edge, parapet, or slope)
 - detail: Shows close-up construction details (flashing, curbs, edge details, roof assembly sections)
 - mechanical: Shows HVAC equipment layout (may show rooftop units)
-- site_plan: Shows the overall site/property layout
-- floor_plan: Shows interior room layout, doors, walls
+- site_plan: Shows the overall site/property layout with building footprints
+- floor_plan: Shows interior room layout, doors, walls with building dimensions
 - cover_sheet: Title page, project info, drawing index
 - general_notes: Specifications, abbreviations, symbols legend
 - unknown: Cannot determine the page type
@@ -33,19 +33,30 @@ IMPORTANT: Set is_roof_relevant = true if the page contains ANY of the following
 - Sheet numbers containing A5, A6, S3, S4, or similar roof-level sheets
 - Title block text mentioning "roof", "roofing", "top of", "parapet"
 
-Be GENEROUS with is_roof_relevant. If there is ANY roof-related content on the page, even partial, set it to true.
-Commercial bid sets often have roof plans labeled as A5.x, S3.x, or similar sheet numbers.
+ALSO set is_roof_relevant = true if:
+- The page shows a BUILDING FOOTPRINT from above with dimensions (this IS useful for roof area)
+- The page is a FLOOR PLAN showing overall building width/length dimensions
+- The page shows building outline dimensions from any angle
+- The page has a SITE PLAN that shows building footprint dimensions or square footage
+- The page mentions any roofing specification, even in notes text
+
+Be VERY GENEROUS with is_roof_relevant. When in doubt, set it to TRUE.
+For a commercial bid set, ANY page showing building dimensions is useful for roof estimation.
+
+Also set has_building_dimensions = true if the page has any dimension strings (e.g., 120'-0", 85', etc.) showing building width, length, or area.
 
 Respond with ONLY this JSON (no other text):
 {
-    "page_type": "roof_plan",
-    "confidence": 0.95,
-    "title_block_text": "A5.1 - ROOF PLAN",
+    "page_type": "floor_plan",
+    "confidence": 0.85,
+    "title_block_text": "A1.1 - FLOOR PLAN",
     "is_roof_relevant": true,
-    "notes": "Clear roof plan with dimensions and drain locations marked"
+    "has_building_dimensions": true,
+    "notes": "Floor plan showing building dimensions of 120' x 85' which can be used for roof area"
 }"""
 
-SCALE_DETECTION_PROMPT = """You are analyzing an architectural roof plan drawing.
+
+SCALE_DETECTION_PROMPT = """You are analyzing an architectural drawing page.
 Find the scale of this drawing.
 
 Look for:
@@ -53,13 +64,14 @@ Look for:
 2. Text stating the scale (e.g., 1/8" = 1'-0", SCALE: 1/4" = 1', 1:100)
 3. Title block information that includes scale
 4. Multiple scales if different areas have different scales
+5. ANY text that mentions feet, inches, or scale ratios
 
 Common architectural scales:
 - 1/8" = 1'-0" (1:96) - most common for roof plans
 - 3/16" = 1'-0" (1:64)
 - 1/4" = 1'-0" (1:48) - common for larger detail
 - 1/16" = 1'-0" (1:192) - used for large buildings
- - 3/32" = 1'-0" (1:128) - sometimes used for commercial
+- 3/32" = 1'-0" (1:128) - sometimes used for commercial
 
 Respond with ONLY this JSON (no other text):
 {
@@ -109,56 +121,86 @@ Otherwise, respond with ONLY this JSON (no other text):
             "source": "Calculated from 125' x 100' main section",
             "location": "Main roof area",
             "notes": "Single rectangular section clearly dimensioned"
-        },
-        {
-            "type": "perimeter",
-            "value": 450,
-            "unit": "lnft",
-            "confidence": 0.85,
-            "source": "Sum of all exterior edges from dimensions",
-            "location": "Building perimeter",
-            "notes": "125+100+125+100 = 450 lnft"
-        },
-        {
-            "type": "penetration",
-            "value": 3,
-            "unit": "each",
-            "confidence": 0.80,
-            "source": "Pipe and vent symbols on drawing",
-            "location": "Various locations",
-            "notes": "2 pipe penetrations, 1 exhaust fan curb"
-        },
-        {
-            "type": "flashing",
-            "value": 500,
-            "unit": "lnft",
-            "confidence": 0.75,
-            "source": "Perimeter coping + curb flashings",
-            "location": "All edges plus HVAC curbs",
-            "notes": "450 lnft perimeter + ~50 lnft curb flashing"
-        },
-        {
-            "type": "slope",
-            "value": 0.25,
-            "unit": "in_per_ft",
-            "confidence": 0.85,
-            "source": "Slope arrow notation 1/4:12",
-            "location": "Sloping toward drains",
-            "notes": "1/4 inch per foot slope to drains"
-        },
-        {
-            "type": "drain",
-            "value": 4,
-            "unit": "each",
-            "confidence": 0.90,
-            "source": "Drain symbols (circle with crosshairs)",
-            "location": "4 internal drains evenly spaced",
-            "notes": "Standard 4-inch internal roof drains"
         }
     ],
     "overall_confidence": 0.85,
     "drawing_quality": "good",
     "notes": "Clear roof plan with most dimensions labeled."
+}"""
+
+
+# More aggressive prompt for bid sets without a dedicated roof plan page
+BID_SET_EXTRACTION_PROMPT = """You are a commercial roofing estimator. This architectural drawing may NOT be a roof plan, but you need to extract ANY information useful for roofing estimation.
+
+{scale_context}
+
+YOUR MISSION: Find building dimensions, equipment counts, or any other measurements that help estimate roofing work. Be AGGRESSIVE in looking for data.
+
+LOOK FOR THESE THINGS ON ANY PAGE TYPE:
+
+FLOOR PLANS / SITE PLANS:
+- Building overall dimensions (length x width) → calculate roof area as length × width
+- Building footprint outline → estimate area from the shape
+- Multiple wings or sections → add up each section
+- Dimension strings along walls (e.g., "120'-0"", "85'-4"")
+- Area callouts (e.g., "12,500 SF", "BLDG AREA: 8,000 SF")
+- Room dimensions that span the whole building width/length
+
+ELEVATION VIEWS:
+- Building width from side views
+- Parapet wall height (useful for flashing length)
+- Roof slope or pitch indicators
+- Number of stories (affects access costs)
+
+DETAIL PAGES:
+- Roof assembly details (membrane type, insulation thickness)
+- Flashing details (type of edge metal, coping size)
+- Drain details (drain size, type)
+- Curb/penetration details
+
+MECHANICAL / EQUIPMENT PLANS:
+- Count of rooftop HVAC units
+- Equipment sizes for curb calculations
+- Ductwork penetrations through roof
+
+GENERAL NOTES / SPECIFICATIONS:
+- Roofing specification references (Section 07 52 00, etc.)
+- Material specifications (TPO, EPDM, modified bitumen)
+- Insulation R-value or thickness
+- Slope requirements mentioned in text
+- Warranty requirements
+
+DIMENSION READING TIPS:
+- Look for numbers with foot marks: 120'-0", 85'-4", 200'
+- Look for numbers with dash formatting: 120-0, 85-4
+- Look for dimension lines with arrows at both ends
+- A rectangle that is 120' x 85' has area = 10,200 sqft and perimeter = 410 lnft
+- If you see partial dimensions, still report them with lower confidence
+
+Report ANY of these measurement types you can find:
+- roof_area (sqft) - from building footprint or dimensions
+- perimeter (lnft) - sum of all outside edges
+- penetration (each) - count of roof penetrations, HVAC units, pipes, vents
+- flashing (lnft) - coping, edge metal, curb flashing
+- slope (in_per_ft) - roof slope
+- drain (each) - roof drains, scuppers
+- parapet_height (inches) - height of parapet walls
+- insulation (inches) - insulation thickness
+- equipment (each) - rooftop equipment count
+
+If you find dimensions that give building area, ALWAYS calculate and report roof_area AND perimeter.
+
+If you find NOTHING useful at all, return:
+{"measurements": [], "overall_confidence": 0.0, "notes": "No useful measurements found"}
+
+Otherwise respond with ONLY JSON:
+{
+    "measurements": [
+        {"type": "roof_area", "value": 10200, "unit": "sqft", "confidence": 0.75, "source": "Building dimensions 120' x 85' from floor plan", "location": "Main building", "notes": "Calculated from building footprint dimensions"},
+        {"type": "perimeter", "value": 410, "unit": "lnft", "confidence": 0.75, "source": "Building perimeter from dimensions", "location": "Building edges", "notes": "2*(120+85) = 410 lnft"}
+    ],
+    "overall_confidence": 0.75,
+    "notes": "Extracted building dimensions from floor plan to estimate roof area"
 }"""
 
 
@@ -211,6 +253,22 @@ def build_measurement_prompt_with_scale(scale_info: dict) -> str:
     return MEASUREMENT_EXTRACTION_PROMPT.replace("{scale_context}", scale_context)
 
 
+def build_bidset_prompt_with_scale(scale_info: dict) -> str:
+    """Build the aggressive bid set extraction prompt with scale context."""
+    if scale_info and scale_info.get("scale_found"):
+        scale_context = (
+            f"SCALE: {scale_info.get('scale_notation', 'unknown')} "
+            f"(ratio 1:{scale_info.get('scale_ratio', 'unknown')})\n"
+            f"Use this to convert drawn dimensions to real dimensions."
+        )
+    else:
+        scale_context = (
+            "No scale detected. Use ONLY labeled dimensions (numbers on the drawing).\n"
+            "You CAN still count items and read labeled dimensions regardless of scale."
+        )
+    return BID_SET_EXTRACTION_PROMPT.replace("{scale_context}", scale_context)
+
+
 # ==========================================================
 # SANITY CHECKS
 # ==========================================================
@@ -222,6 +280,9 @@ SANITY_LIMITS = {
     "flashing": {"min": 0, "max": 100000, "unit": "lnft"},
     "slope": {"min": 0, "max": 45, "unit": "deg"},
     "drain": {"min": 0, "max": 100, "unit": "each"},
+    "parapet_height": {"min": 0, "max": 120, "unit": "inches"},
+    "insulation": {"min": 0, "max": 24, "unit": "inches"},
+    "equipment": {"min": 0, "max": 100, "unit": "each"},
 }
 
 
