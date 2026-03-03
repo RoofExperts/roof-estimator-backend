@@ -2,6 +2,11 @@
 Core AI Vision analysis engine for reading architectural roof plans.
 Converts PDF pages to images, sends to GPT-4o vision, extracts measurements,
 and auto-creates RoofCondition records.
+
+Page-type-aware extraction:
+  - Slab Plan → roof area (L×W), parapet wall (lnft), coping (lnft)
+  - Roof Plan → roof drains (ea), scuppers (ea), pitch pans (ea), pipes (ea), curbs (lnft)
+  - Elevations → parapet flashing height (in), collector heads (ea), downspouts (lnft)
 """
 
 import os
@@ -19,8 +24,7 @@ from conditions_models import RoofCondition
 from vision_prompts import (
     PAGE_TYPE_PROMPT,
     SCALE_DETECTION_PROMPT,
-    build_measurement_prompt_with_scale,
-    build_bidset_prompt_with_scale,
+    build_prompt_for_page_type,
     parse_vision_response,
     validate_extraction,
 )
@@ -31,7 +35,7 @@ MAX_PAGES = 20
 IMAGE_DPI = 150
 MAX_IMAGE_SIZE_MB = 4.0
 VISION_MODEL = "gpt-4o"
-MAX_EXTRACTION_PAGES = 8  # Analyze up to 8 pages for measurements
+MAX_EXTRACTION_PAGES = 10  # Analyze up to 10 pages for measurements
 
 
 def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
@@ -104,20 +108,38 @@ def detect_scale(image_base64: str) -> dict:
     return parse_vision_response(call_vision_api(image_base64, SCALE_DETECTION_PROMPT))
 
 
-def extract_measurements(image_base64: str, scale_info: dict) -> dict:
-    """Use GPT-4o to extract all roof measurements from the plan page."""
-    prompt = build_measurement_prompt_with_scale(scale_info)
+def extract_measurements_for_page(image_base64: str, page_type: str, scale_info: dict) -> dict:
+    """Use GPT-4o to extract measurements using the appropriate page-type prompt."""
+    prompt = build_prompt_for_page_type(page_type, scale_info)
     return parse_vision_response(call_vision_api(image_base64, prompt))
 
 
-def extract_measurements_aggressive(image_base64: str, scale_info: dict) -> dict:
-    """Use GPT-4o with aggressive bid set prompt for any page type."""
-    prompt = build_bidset_prompt_with_scale(scale_info)
-    return parse_vision_response(call_vision_api(image_base64, prompt))
-
+# ======================================================================
+# Extraction type → RoofCondition mapping
+# ======================================================================
 
 EXTRACTION_TO_CONDITION = {
+    # From slab plan
     "roof_area": {"condition_type": "field", "unit": "sqft"},
+    "parapet_wall": {"condition_type": "edge_detail", "unit": "lnft"},
+    "coping": {"condition_type": "edge_detail", "unit": "lnft"},
+
+    # From roof plan
+    "roof_drain": {"condition_type": "custom", "unit": "each"},
+    "scupper": {"condition_type": "custom", "unit": "each"},
+    "pitch_pan": {"condition_type": "custom", "unit": "each"},
+    "pipe": {"condition_type": "penetration", "unit": "each"},
+    "curb": {"condition_type": "penetration", "unit": "lnft"},
+
+    # From elevations
+    "parapet_flashing": {"condition_type": "edge_detail", "unit": "inches"},
+    "parapet_flashing_low": {"condition_type": "edge_detail", "unit": "inches"},
+    "parapet_flashing_mid": {"condition_type": "edge_detail", "unit": "inches"},
+    "parapet_flashing_high": {"condition_type": "edge_detail", "unit": "inches"},
+    "collector_head": {"condition_type": "custom", "unit": "each"},
+    "downspout": {"condition_type": "custom", "unit": "lnft"},
+
+    # Legacy types (still supported from older extractions)
     "perimeter": {"condition_type": "perimeter", "unit": "lnft"},
     "penetration": {"condition_type": "penetration", "unit": "each"},
     "flashing": {"condition_type": "edge_detail", "unit": "lnft"},
@@ -164,25 +186,55 @@ def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> l
     return created_conditions
 
 
+# ======================================================================
+# Page selection: which pages to send for extraction
+# ======================================================================
+
+# Page types that are useful for extraction, in priority order
+EXTRACTABLE_PAGE_TYPES = [
+    "slab_plan",    # Building dimensions → roof area, parapet wall, coping
+    "roof_plan",    # Drains, scuppers, pitch pans, pipes, curbs
+    "elevation",    # Parapet flashing, collector heads, downspouts
+    "floor_plan",   # May have building dimensions like slab plan
+    "detail",       # May have flashing/curb details
+    "structural",   # May have roof framing dimensions
+    "mechanical",   # May have equipment info
+    "site_plan",    # May show building footprint
+]
+
+
 def select_pages_for_extraction(page_images: list, roof_pages: list, page_classifications: dict) -> list:
     """Select the best pages to try extracting measurements from.
 
     Strategy:
-    1. Use roof-relevant pages first (up to MAX_EXTRACTION_PAGES)
-    2. Also include pages that have building dimensions (floor plans, site plans)
-    3. If still not enough, use smart fallback across the document
+    1. Prioritize slab plans, roof plans, and elevations (the big 3)
+    2. Then include pages flagged roof-relevant
+    3. Then pages with building dimensions
+    4. Fill remaining slots with other extractable page types
     """
     selected = []
     selected_nums = set()
 
-    # First: roof-relevant pages
+    # Priority 1: The Big 3 page types (slab plan, roof plan, elevation)
+    priority_types = ["slab_plan", "roof_plan", "elevation"]
+    for p in page_images:
+        if len(selected) >= MAX_EXTRACTION_PAGES:
+            break
+        cls = page_classifications.get(p["page_number"], {})
+        if cls.get("page_type") in priority_types:
+            selected.append(p)
+            selected_nums.add(p["page_number"])
+            print(f"[Vision]   Priority page: {p['page_number']} ({cls.get('page_type')})")
+
+    # Priority 2: Other roof-relevant pages
     for p in roof_pages:
         if len(selected) >= MAX_EXTRACTION_PAGES:
             break
-        selected.append(p)
-        selected_nums.add(p["page_number"])
+        if p["page_number"] not in selected_nums:
+            selected.append(p)
+            selected_nums.add(p["page_number"])
 
-    # Second: pages with building dimensions (from classification)
+    # Priority 3: Pages with building dimensions
     for p in page_images:
         if len(selected) >= MAX_EXTRACTION_PAGES:
             break
@@ -194,7 +246,7 @@ def select_pages_for_extraction(page_images: list, roof_pages: list, page_classi
             selected_nums.add(p["page_number"])
             print(f"[Vision]   Added page {p['page_number']} (has building dimensions)")
 
-    # Third: floor_plan and site_plan pages (likely to have building footprint)
+    # Priority 4: Other extractable page types
     for p in page_images:
         if len(selected) >= MAX_EXTRACTION_PAGES:
             break
@@ -202,25 +254,16 @@ def select_pages_for_extraction(page_images: list, roof_pages: list, page_classi
             continue
         cls = page_classifications.get(p["page_number"], {})
         page_type = cls.get("page_type", "")
-        if page_type in ("floor_plan", "site_plan", "elevation", "mechanical"):
+        if page_type in EXTRACTABLE_PAGE_TYPES:
             selected.append(p)
             selected_nums.add(p["page_number"])
 
-    # Fourth: if we still have very few, add remaining non-cover pages
-    if len(selected) < 3:
-        for p in page_images:
-            if len(selected) >= MAX_EXTRACTION_PAGES:
-                break
-            if p["page_number"] in selected_nums:
-                continue
-            cls = page_classifications.get(p["page_number"], {})
-            page_type = cls.get("page_type", "")
-            if page_type not in ("cover_sheet",):
-                selected.append(p)
-                selected_nums.add(p["page_number"])
-
     return selected
 
+
+# ======================================================================
+# Main analysis pipeline
+# ======================================================================
 
 def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Session) -> dict:
     """Full analysis pipeline for a roof plan PDF."""
@@ -247,7 +290,7 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         # Step 2: Classify each page
         print(f"[Vision] Classifying {len(page_images)} pages...")
         roof_pages = []
-        page_classifications = {}  # Store full classification by page number
+        page_classifications = {}
 
         for page_data in page_images:
             page_num = page_data["page_number"]
@@ -258,22 +301,23 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             is_relevant = classification.get("is_roof_relevant", False)
             has_dims = classification.get("has_building_dimensions", False)
 
-            # Force roof_plan and structural pages as relevant
-            if page_type in ("roof_plan", "structural"):
+            # Force key page types as relevant
+            if page_type in ("roof_plan", "slab_plan", "structural", "elevation"):
                 is_relevant = True
 
-            # Also consider elevation, detail, mechanical, floor_plan as potentially relevant
-            if page_type in ("elevation", "detail", "mechanical", "floor_plan") and not is_relevant:
+            # Upgrade pages that mention roofing keywords
+            if page_type in ("detail", "mechanical", "floor_plan", "site_plan") and not is_relevant:
                 notes = classification.get("notes", "").lower()
                 title = classification.get("title_block_text", "").lower()
                 if any(kw in notes + " " + title for kw in [
                     "roof", "parapet", "flashing", "drain", "slope", "curb",
-                    "coping", "membrane", "dimension", "footprint", "building"
+                    "coping", "membrane", "dimension", "footprint", "building",
+                    "scupper", "downspout", "collector"
                 ]):
                     is_relevant = True
                     print(f"[Vision]   -> Upgraded page {page_num} to roof-relevant based on content keywords")
 
-            # Floor plans with dimensions are always useful for commercial roofing
+            # Floor plans with dimensions are useful for roof area
             if page_type == "floor_plan" and has_dims:
                 is_relevant = True
                 print(f"[Vision]   -> Floor plan with dimensions - marking as roof-relevant")
@@ -281,9 +325,8 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             # Site plans with dimensions can show building footprint
             if page_type == "site_plan" and has_dims:
                 is_relevant = True
-                print(f"[Vision]   -> Site plan with dimensions - marking as roof-relevant")
 
-            # Store classification for page selection
+            # Store classification
             page_classifications[page_num] = {
                 "page_type": page_type,
                 "is_roof_relevant": is_relevant,
@@ -308,25 +351,21 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
         db.commit()
 
-        # Determine if this is a bid set without a dedicated roof plan
-        has_dedicated_roof_plan = any(
-            page_classifications[p["page_number"]].get("page_type") == "roof_plan"
-            for p in roof_pages
-        ) if roof_pages else False
+        # Log page type summary
+        type_counts = {}
+        for pc in page_classifications.values():
+            pt = pc["page_type"]
+            type_counts[pt] = type_counts.get(pt, 0) + 1
+        print(f"[Vision] Page type summary: {type_counts}")
 
-        is_bid_set_mode = not has_dedicated_roof_plan
-        if is_bid_set_mode:
-            print("[Vision] ** BID SET MODE ** No dedicated roof plan found - using aggressive extraction")
-
-        # Step 2b: Select pages for extraction (uses smarter selection now)
+        # Step 2b: Select pages for extraction
         pages_to_extract = select_pages_for_extraction(page_images, roof_pages, page_classifications)
         extract_page_nums = [p["page_number"] for p in pages_to_extract]
         print(f"[Vision] Pages selected for extraction: {extract_page_nums}")
 
-        # Step 3: Detect scale (try multiple pages)
+        # Step 3: Detect scale (try extraction pages first)
         print("[Vision] Detecting scale...")
         scale_info = {"scale_found": False}
-        # Try all extraction pages for scale, not just first 3
         for page_data in pages_to_extract:
             scale_info = detect_scale(page_data["image_base64"])
             if scale_info.get("scale_found"):
@@ -338,19 +377,18 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             else:
                 print(f"[Vision]   No scale found on page {page_data['page_number']}, trying next...")
 
-        # Step 4: Extract measurements from selected pages
+        # Step 4: Extract measurements using page-type-specific prompts
         all_measurements = []
         pages_with_extractions = []
 
         for page_data in pages_to_extract:
             page_num = page_data["page_number"]
-            print(f"[Vision] Extracting measurements from page {page_num}...")
+            page_type = page_classifications.get(page_num, {}).get("page_type", "unknown")
+            print(f"[Vision] Extracting from page {page_num} (type: {page_type})...")
 
-            # Use aggressive prompt for bid set mode, standard for normal mode
-            if is_bid_set_mode:
-                measurements_result = extract_measurements_aggressive(page_data["image_base64"], scale_info)
-            else:
-                measurements_result = extract_measurements(page_data["image_base64"], scale_info)
+            measurements_result = extract_measurements_for_page(
+                page_data["image_base64"], page_type, scale_info
+            )
 
             if "error" in measurements_result:
                 print(f"[Vision]   Page {page_num}: extraction error - {measurements_result.get('error')}")
@@ -361,39 +399,49 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements")
                 for m in page_measurements:
                     m["_page_number"] = page_num
+                    print(f"[Vision]     - {m.get('type')}: {m.get('value')} {m.get('unit')}")
                 all_measurements.extend(page_measurements)
                 pages_with_extractions.append(page_num)
             else:
                 print(f"[Vision]   Page {page_num}: no measurements found")
 
-        # If still no measurements, try ALL remaining pages with aggressive prompt
-        if not all_measurements:
+        # Extended search: if we got very few extractions, try remaining pages
+        if len(all_measurements) < 3:
             tried_pages = {p["page_number"] for p in pages_to_extract}
             remaining = [p for p in page_images if p["page_number"] not in tried_pages]
             if remaining:
-                print(f"[Vision] No measurements yet - trying {len(remaining)} remaining pages with aggressive extraction...")
+                print(f"[Vision] Few extractions so far - trying {len(remaining)} remaining pages...")
                 for page_data in remaining:
                     page_num = page_data["page_number"]
                     cls = page_classifications.get(page_num, {})
-                    # Skip cover sheets in extended search
                     if cls.get("page_type") == "cover_sheet":
                         continue
-                    print(f"[Vision] Extracting from page {page_num} (extended search)...")
-                    measurements_result = extract_measurements_aggressive(page_data["image_base64"], scale_info)
+                    page_type = cls.get("page_type", "unknown")
+                    print(f"[Vision] Extended search: page {page_num} (type: {page_type})...")
+                    measurements_result = extract_measurements_for_page(
+                        page_data["image_base64"], page_type, scale_info
+                    )
                     if "error" not in measurements_result:
                         page_measurements = measurements_result.get("measurements", [])
                         if page_measurements:
                             print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements!")
                             for m in page_measurements:
                                 m["_page_number"] = page_num
+                                print(f"[Vision]     - {m.get('type')}: {m.get('value')} {m.get('unit')}")
                             all_measurements.extend(page_measurements)
                             pages_with_extractions.append(page_num)
-                            # Don't break - keep searching for more data
 
         print(f"[Vision] Total raw measurements found: {len(all_measurements)} from pages {pages_with_extractions}")
 
-        # Step 5: Store extractions (deduplicate by type, keep highest confidence)
+        # Step 5: Deduplicate and store extractions
+        # For "eaches" items: sum across pages (e.g., drains on multiple elevations)
+        # For area/length items: keep highest confidence
+        SUMMABLE_TYPES = {"roof_drain", "scupper", "pitch_pan", "pipe", "collector_head"}
+        KEEP_ALL_TYPES = {"parapet_flashing", "parapet_flashing_low", "parapet_flashing_mid", "parapet_flashing_high"}
+
         best_by_type = {}
+        sums_by_type = {}
+
         for m in all_measurements:
             ext_type = m.get("type", "custom")
             confidence = m.get("confidence", 0.5)
@@ -403,12 +451,37 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             if value == 0:
                 continue
 
-            if ext_type not in best_by_type or confidence > best_by_type[ext_type].get("confidence", 0):
-                best_by_type[ext_type] = m
+            if ext_type in SUMMABLE_TYPES:
+                # For countable items found on DIFFERENT pages, keep the max count per page
+                # (same items may appear on the same page, so don't double-count within a page)
+                # But if found on different pages (e.g., drains on roof plan + detail),
+                # take the higher count since they likely show the same drains
+                if ext_type not in best_by_type or confidence > best_by_type[ext_type].get("confidence", 0):
+                    best_by_type[ext_type] = m
+            elif ext_type in KEEP_ALL_TYPES:
+                # Parapet flashing heights: keep each distinct height
+                key = f"{ext_type}_{value}"
+                if key not in best_by_type:
+                    best_by_type[key] = m
+            else:
+                # For area/length measurements: keep highest confidence
+                if ext_type not in best_by_type or confidence > best_by_type[ext_type].get("confidence", 0):
+                    best_by_type[ext_type] = m
+
+        # Round downspouts to nearest 10 lnft
+        if "downspout" in best_by_type:
+            ds = best_by_type["downspout"]
+            raw_val = ds.get("value", 0)
+            rounded = round(raw_val / 10) * 10
+            if rounded == 0 and raw_val > 0:
+                rounded = 10
+            ds["value"] = rounded
+            print(f"[Vision] Downspout rounded: {raw_val} -> {rounded} lnft")
 
         extraction_count = 0
         overall_confidence = 0.0
-        for ext_type, m in best_by_type.items():
+        for key, m in best_by_type.items():
+            ext_type = m.get("type", "custom")
             value = m.get("value", 0)
             unit = m.get("unit", "each")
 
@@ -450,7 +523,6 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             "plan_file_id": plan_file_id,
             "pages_analyzed": len(page_images),
             "roof_pages_found": len(roof_pages),
-            "bid_set_mode": is_bid_set_mode,
             "pages_extracted_from": pages_with_extractions,
             "scale_detected": scale_info.get("scale_found", False),
             "scale": scale_info.get("scale_notation"),
