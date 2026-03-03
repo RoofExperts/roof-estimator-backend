@@ -1,5 +1,6 @@
 """
 GPT-4o Vision prompt templates for architectural roof plan analysis.
+Domain-specific extraction logic for commercial roofing estimation.
 """
 
 import json
@@ -10,11 +11,11 @@ PAGE_TYPE_PROMPT = """You are analyzing a page from an architectural drawing set
 Your job is to classify this page AND determine if it contains any roof-related information.
 
 Classify this page into one of the following types:
-- roof_plan: Shows the roof layout from above with dimensions, slopes, drains, penetrations, crickets, tapered insulation, or roofing notes
+- roof_plan: Shows the roof layout from above with drains, scuppers, slopes, penetrations, pitch pans, pipes, curbs, crickets, tapered insulation, or roofing notes
+- slab_plan: Shows the building slab/foundation plan from above WITH overall building dimensions (length x width). This is often labeled "Slab Plan", "Foundation Plan", "Slab on Grade", or shows the building footprint with dimension strings.
 - structural: Shows structural framing, beams, columns, joists, or decking (may include roof framing)
-- foundation: Shows the building foundation/slab plan
-- elevation: Shows a side view of the building (may show roof edge, parapet, or slope)
-- detail: Shows close-up construction details (flashing, curbs, edge details, roof assembly sections)
+- elevation: Shows a side view of the building showing T.O. (top of) notes, parapet heights, collector heads, downspouts, building heights
+- detail: Shows close-up construction details (flashing, curbs, edge details, roof assembly sections, coping details)
 - mechanical: Shows HVAC equipment layout (may show rooftop units)
 - site_plan: Shows the overall site/property layout with building footprints
 - floor_plan: Shows interior room layout, doors, walls with building dimensions
@@ -23,36 +24,29 @@ Classify this page into one of the following types:
 - unknown: Cannot determine the page type
 
 IMPORTANT: Set is_roof_relevant = true if the page contains ANY of the following:
-- Roof plan view (overhead view showing roof areas, slopes, drains, crickets)
-- Roof framing plan (joists, beams, decking layout at roof level)
+- Roof plan view (overhead view showing roof areas, slopes, drains, scuppers, pitch pans, pipes, curbs)
+- Slab/foundation plan with building dimensions (length x width) — this gives us roof area
 - Building sections showing roof assembly or slope
-- Roof detail drawings (flashing, edge, curb, drain, penetration details)
-- Elevation views showing roof line, parapet, slope, or roofing materials
+- Roof detail drawings (flashing, edge, curb, drain, penetration, coping details)
+- Elevation views showing parapet heights, T.O. notes, collector heads, downspouts
 - Mechanical plans showing rooftop equipment placement
 - Any annotations about roofing materials, insulation, or membrane
-- Sheet numbers containing A5, A6, S3, S4, or similar roof-level sheets
-- Title block text mentioning "roof", "roofing", "top of", "parapet"
-
-ALSO set is_roof_relevant = true if:
-- The page shows a BUILDING FOOTPRINT from above with dimensions (this IS useful for roof area)
-- The page is a FLOOR PLAN showing overall building width/length dimensions
-- The page shows building outline dimensions from any angle
-- The page has a SITE PLAN that shows building footprint dimensions or square footage
-- The page mentions any roofing specification, even in notes text
+- Floor plans with overall building length and width dimensions
+- Site plans showing building footprint dimensions
 
 Be VERY GENEROUS with is_roof_relevant. When in doubt, set it to TRUE.
-For a commercial bid set, ANY page showing building dimensions is useful for roof estimation.
+For a commercial bid set, ANY page showing building dimensions, parapet details, or roof items is useful.
 
 Also set has_building_dimensions = true if the page has any dimension strings (e.g., 120'-0", 85', etc.) showing building width, length, or area.
 
 Respond with ONLY this JSON (no other text):
 {
-    "page_type": "floor_plan",
+    "page_type": "slab_plan",
     "confidence": 0.85,
-    "title_block_text": "A1.1 - FLOOR PLAN",
+    "title_block_text": "S1.1 - SLAB PLAN",
     "is_roof_relevant": true,
     "has_building_dimensions": true,
-    "notes": "Floor plan showing building dimensions of 120' x 85' which can be used for roof area"
+    "notes": "Slab plan showing building dimensions of 120' x 85' which gives roof area"
 }"""
 
 
@@ -84,124 +78,209 @@ Respond with ONLY this JSON (no other text):
 }"""
 
 
-MEASUREMENT_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing an architectural drawing page.
-Extract ALL measurable roof information you can find on this page.
+# ======================================================================
+# PAGE-SPECIFIC EXTRACTION PROMPTS
+# ======================================================================
+
+SLAB_PLAN_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing a SLAB PLAN or FOUNDATION PLAN page.
 
 {scale_context}
 
-IMPORTANT: This page may or may not be a dedicated roof plan. Extract whatever roofing-related measurements you can find, including:
+YOUR MISSION: Extract the building dimensions to calculate roof area and parapet wall measurements.
 
-1. ROOF AREA (sqft): Total roof surface area from dimensions. If you see building dimensions from above, calculate the area.
-2. PERIMETER (lnft): Total building perimeter at roof level
-3. PENETRATIONS: Count all roof penetrations (pipes, vents, HVAC curbs, exhaust fans) - NOT drains
-4. FLASHING/EDGE DETAILS (lnft): Total linear feet needing flashing (coping, gravel stop, drip edge)
-5. ROOF SLOPE: Slope angle or pitch (look for slope arrows, cricket slopes, tapered insulation diagrams)
-6. DRAINS: Count roof drains (circles with crosshairs, leaders) and scuppers
-7. OTHER: Expansion joints, area dividers, skylights, equipment screens, hatches, walkway pads
+WHAT TO LOOK FOR ON A SLAB PLAN:
 
-TIPS FOR COMMERCIAL PLANS:
-- Building outlines shown from above usually indicate roof area - measure them
-- Look for dimension strings along the building edges
-- HVAC units shown on roof are penetrations requiring curbs
-- Parapet walls around edges indicate perimeter needing coping/flashing
-- Even if this is not labeled as a roof plan, extract any dimensions you can see
-- If you see a building footprint with dimensions, calculate the roof area from those
+1. BUILDING DIMENSIONS (length x width):
+   - Look for dimension strings along the outside edges: "120'-0"", "85'-4"", "200'"
+   - Look for dimension lines with arrows/ticks at both ends
+   - The building may have multiple rectangular sections — measure each one
+   - Calculate ROOF AREA = length × width for each section, then sum them
+   - Calculate PERIMETER = sum of all outside edges
 
-If you find NO measurable information on this page at all, return:
-{"measurements": [], "overall_confidence": 0.0, "drawing_quality": "not_applicable", "notes": "No roofing measurements found on this page"}
+2. PARAPET WALLS:
+   - Look for thick lines around the building perimeter — these are parapet walls
+   - Measure the total LINEAR FEET of parapet wall (usually same as building perimeter)
+   - Report as "parapet_wall" in lineal feet
 
-Otherwise, respond with ONLY this JSON (no other text):
-{
-    "measurements": [
-        {
-            "type": "roof_area",
-            "value": 12500,
-            "unit": "sqft",
-            "confidence": 0.90,
-            "source": "Calculated from 125' x 100' main section",
-            "location": "Main roof area",
-            "notes": "Single rectangular section clearly dimensioned"
-        }
-    ],
-    "overall_confidence": 0.85,
-    "drawing_quality": "good",
-    "notes": "Clear roof plan with most dimensions labeled."
-}"""
-
-
-# More aggressive prompt for bid sets without a dedicated roof plan page
-BID_SET_EXTRACTION_PROMPT = """You are a commercial roofing estimator. This architectural drawing may NOT be a roof plan, but you need to extract ANY information useful for roofing estimation.
-
-{scale_context}
-
-YOUR MISSION: Find building dimensions, equipment counts, or any other measurements that help estimate roofing work. Be AGGRESSIVE in looking for data.
-
-LOOK FOR THESE THINGS ON ANY PAGE TYPE:
-
-FLOOR PLANS / SITE PLANS:
-- Building overall dimensions (length x width) → calculate roof area as length × width
-- Building footprint outline → estimate area from the shape
-- Multiple wings or sections → add up each section
-- Dimension strings along walls (e.g., "120'-0"", "85'-4"")
-- Area callouts (e.g., "12,500 SF", "BLDG AREA: 8,000 SF")
-- Room dimensions that span the whole building width/length
-
-ELEVATION VIEWS:
-- Building width from side views
-- Parapet wall height (useful for flashing length)
-- Roof slope or pitch indicators
-- Number of stories (affects access costs)
-
-DETAIL PAGES:
-- Roof assembly details (membrane type, insulation thickness)
-- Flashing details (type of edge metal, coping size)
-- Drain details (drain size, type)
-- Curb/penetration details
-
-MECHANICAL / EQUIPMENT PLANS:
-- Count of rooftop HVAC units
-- Equipment sizes for curb calculations
-- Ductwork penetrations through roof
-
-GENERAL NOTES / SPECIFICATIONS:
-- Roofing specification references (Section 07 52 00, etc.)
-- Material specifications (TPO, EPDM, modified bitumen)
-- Insulation R-value or thickness
-- Slope requirements mentioned in text
-- Warranty requirements
+3. COPING:
+   - Coping goes on top of parapet walls
+   - Coping linear feet = parapet wall linear feet (same measurement)
+   - Report as "coping" in lineal feet
 
 DIMENSION READING TIPS:
-- Look for numbers with foot marks: 120'-0", 85'-4", 200'
-- Look for numbers with dash formatting: 120-0, 85-4
-- Look for dimension lines with arrows at both ends
-- A rectangle that is 120' x 85' has area = 10,200 sqft and perimeter = 410 lnft
-- If you see partial dimensions, still report them with lower confidence
+- Numbers with foot marks: 120'-0", 85'-4", 200'
+- Numbers with dash formatting: 120-0, 85-4
+- A rectangle 120' x 85' has area = 10,200 sqft and perimeter = 410 lnft
+- If the building is L-shaped or irregular, break it into rectangles and add up
 
-Report ANY of these measurement types you can find:
-- roof_area (sqft) - from building footprint or dimensions
-- perimeter (lnft) - sum of all outside edges
-- penetration (each) - count of roof penetrations, HVAC units, pipes, vents
-- flashing (lnft) - coping, edge metal, curb flashing
-- slope (in_per_ft) - roof slope
-- drain (each) - roof drains, scuppers
-- parapet_height (inches) - height of parapet walls
-- insulation (inches) - insulation thickness
-- equipment (each) - rooftop equipment count
+Report these measurement types:
+- roof_area (sqft) — length × width, calculated
+- parapet_wall (lnft) — total linear feet of parapet walls around building
+- coping (lnft) — same as parapet wall length (coping sits on top of parapet)
 
-If you find dimensions that give building area, ALWAYS calculate and report roof_area AND perimeter.
-
-If you find NOTHING useful at all, return:
-{"measurements": [], "overall_confidence": 0.0, "notes": "No useful measurements found"}
+If you find NOTHING useful, return:
+{{"measurements": [], "overall_confidence": 0.0, "notes": "No measurements found"}}
 
 Otherwise respond with ONLY JSON:
-{
+{{
     "measurements": [
-        {"type": "roof_area", "value": 10200, "unit": "sqft", "confidence": 0.75, "source": "Building dimensions 120' x 85' from floor plan", "location": "Main building", "notes": "Calculated from building footprint dimensions"},
-        {"type": "perimeter", "value": 410, "unit": "lnft", "confidence": 0.75, "source": "Building perimeter from dimensions", "location": "Building edges", "notes": "2*(120+85) = 410 lnft"}
+        {{"type": "roof_area", "value": 10200, "unit": "sqft", "confidence": 0.85, "source": "Building dimensions 120' x 85'", "location": "Main building", "notes": "Calculated 120 x 85 = 10,200 sqft"}},
+        {{"type": "parapet_wall", "value": 410, "unit": "lnft", "confidence": 0.80, "source": "Perimeter of building", "location": "Building perimeter", "notes": "2*(120+85) = 410 lnft"}},
+        {{"type": "coping", "value": 410, "unit": "lnft", "confidence": 0.80, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
+    ],
+    "overall_confidence": 0.80,
+    "notes": "Slab plan with clear building dimensions"
+}}"""
+
+
+ROOF_PLAN_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing a ROOF PLAN page.
+
+{scale_context}
+
+YOUR MISSION: Count all roof items visible on this plan. These are critical for the roofing estimate.
+
+WHAT TO LOOK FOR ON A ROOF PLAN:
+
+1. ROOF DRAINS (eaches):
+   - Typically shown as circles with crosshairs or X marks
+   - May be labeled "RD" or "ROOF DRAIN"
+   - Count every drain you can find
+   - Report as "roof_drain" with unit "each"
+
+2. SCUPPERS (eaches):
+   - Openings in parapet walls for water drainage
+   - Typically shown as rectangular openings in the parapet wall line
+   - May be labeled "SCUPPER" or "SC"
+   - Report as "scupper" with unit "each"
+
+3. PITCH PANS (eaches):
+   - Shown as small squares or rectangles around pipe penetrations
+   - May be labeled "PITCH PAN" or "PP"
+   - Used to seal around pipes/supports that penetrate the roof
+   - Report as "pitch_pan" with unit "each"
+
+4. PIPES (eaches):
+   - Small circles on the roof plan representing pipe penetrations
+   - May be labeled "PIPE PEN.", "VENT PIPE", "PLUMBING VENT"
+   - Report as "pipe" with unit "each"
+
+5. CURBS (lineal feet):
+   - Rectangular shapes on the roof for HVAC units, skylights, hatches
+   - Measure the PERIMETER around each curb (all 4 sides)
+   - If curb is 4' x 4', perimeter = 16 lnft. If 8' x 6', perimeter = 28 lnft
+   - Sum all curb perimeters together
+   - Report as "curb" with unit "lnft"
+
+6. ROOF AREA (sqft) — if dimensions are visible:
+   - If the roof plan shows overall dimensions, calculate area
+   - Report as "roof_area" with unit "sqft"
+
+COUNT CAREFULLY. Each individual drain, scupper, pitch pan, and pipe is one "each".
+
+If you find NOTHING useful, return:
+{{"measurements": [], "overall_confidence": 0.0, "notes": "No measurements found"}}
+
+Otherwise respond with ONLY JSON:
+{{
+    "measurements": [
+        {{"type": "roof_drain", "value": 4, "unit": "each", "confidence": 0.85, "source": "Counted 4 roof drains with crosshair symbols", "location": "Roof plan", "notes": "4 drains visible"}},
+        {{"type": "scupper", "value": 2, "unit": "each", "confidence": 0.80, "source": "2 scupper openings in parapet wall", "location": "East and west parapet", "notes": "Rectangular openings in parapet"}},
+        {{"type": "pitch_pan", "value": 3, "unit": "each", "confidence": 0.75, "source": "3 pitch pan details around penetrations", "location": "Roof plan", "notes": "Square shapes around pipes"}},
+        {{"type": "pipe", "value": 6, "unit": "each", "confidence": 0.80, "source": "6 pipe penetrations", "location": "Roof plan", "notes": "Small circles labeled as vents/pipes"}},
+        {{"type": "curb", "value": 48, "unit": "lnft", "confidence": 0.75, "source": "3 curbs: 2x(4x4)=32 lnft + 1x(4x4)=16 lnft", "location": "Roof plan", "notes": "Total curb perimeter from 3 HVAC curbs"}}
+    ],
+    "overall_confidence": 0.80,
+    "notes": "Roof plan with drains, scuppers, pitch pans, pipes, and curbs"
+}}"""
+
+
+ELEVATION_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing an ELEVATION VIEW page.
+
+{scale_context}
+
+YOUR MISSION: Extract parapet heights, collector heads, and downspout measurements from this elevation.
+
+WHAT TO LOOK FOR ON ELEVATIONS:
+
+1. PARAPET FLASHING HEIGHT:
+   - Look for "T.O. STEEL DECK" or "T.O. CANOPY" or "T.O. ROOF DECK" note — this is the TOP of the steel deck (baseline)
+   - Look for "T.O. LOW PARAPET", "T.O. MID PARAPET", "T.O. HIGH PARAPET" or just "T.O. PARAPET"
+   - PARAPET FLASHING HEIGHT = T.O. Parapet elevation MINUS T.O. Steel Deck elevation
+   - Example: T.O. Parapet = 25'-4", T.O. Steel Deck = 22'-0", so flashing height = 3'-4" = 40 inches
+   - There may be multiple parapet heights (low, mid, high) — report each one separately
+   - Report as "parapet_flashing_low", "parapet_flashing_mid", "parapet_flashing_high" or just "parapet_flashing" if only one height
+   - Unit is INCHES
+
+2. COLLECTOR HEADS (eaches):
+   - Box-like elements at the top of downspouts where the roof gutter connects
+   - Usually shown at parapet level or just below
+   - May be labeled "COLLECTOR HEAD" or "C.H."
+   - Count each one
+   - Report as "collector_head" with unit "each"
+
+3. DOWNSPOUTS (lineal feet):
+   - Vertical lines running down the building face from collector heads to grade
+   - Measure from the collector head down to the ground/grade level
+   - ROUND to nearest 10 feet
+   - Example: collector head at 24' elevation, grade at 0' → downspout = 24 lnft → round to 20 lnft
+   - Report TOTAL lineal feet of all downspouts (sum them up)
+   - Report as "downspout" with unit "lnft"
+
+ELEVATION READING TIPS:
+- Elevation marks look like: EL. 25'-4", +25.33', T.O. 22'-0"
+- The difference between two elevation marks gives you a height
+- Grade/ground level is usually 0'-0" or 100'-0" (benchmark)
+- Count downspouts on ALL elevations shown
+
+If you find NOTHING useful, return:
+{{"measurements": [], "overall_confidence": 0.0, "notes": "No measurements found"}}
+
+Otherwise respond with ONLY JSON:
+{{
+    "measurements": [
+        {{"type": "parapet_flashing", "value": 40, "unit": "inches", "confidence": 0.85, "source": "T.O. Parapet 25'-4\" minus T.O. Steel Deck 22'-0\" = 3'-4\" = 40 inches", "location": "Main parapet", "notes": "Single parapet height"}},
+        {{"type": "collector_head", "value": 3, "unit": "each", "confidence": 0.80, "source": "3 collector heads visible on elevation", "location": "South elevation", "notes": "Box shapes at top of downspouts"}},
+        {{"type": "downspout", "value": 80, "unit": "lnft", "confidence": 0.75, "source": "3 downspouts x ~25' each = 75 lnft, rounded to 80", "location": "South elevation", "notes": "Vertical lines from collector heads to grade, rounded to 10'"}}
+    ],
+    "overall_confidence": 0.80,
+    "notes": "Elevation showing parapet heights, collector heads, and downspouts"
+}}"""
+
+
+# Generic fallback for other page types
+GENERAL_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing an architectural drawing page.
+This may be a detail, mechanical, structural, or other page type.
+
+{scale_context}
+
+Extract ANY information useful for roofing estimation:
+
+LOOK FOR:
+- Building dimensions (length x width) → calculate roof area (sqft)
+- Roof drains — eaches count (circles with crosshairs)
+- Scuppers — eaches count (openings in parapet walls)
+- Pitch pans — eaches count (squares around pipe penetrations)
+- Pipes — eaches count (small circles, vent pipes)
+- Curbs — lineal feet around each curb (measure perimeter of each curb, sum all)
+- Parapet flashing height — T.O. Parapet minus T.O. Steel Deck, in inches
+- Coping — lineal feet of parapet wall
+- Parapet wall — lineal feet
+- Collector heads — eaches count
+- Downspouts — lineal feet from collector head to grade, rounded to nearest 10'
+- Rooftop equipment count
+- Roof assembly details (membrane type, insulation thickness)
+
+If you find NOTHING useful, return:
+{{"measurements": [], "overall_confidence": 0.0, "notes": "No useful measurements found"}}
+
+Otherwise respond with ONLY JSON:
+{{
+    "measurements": [
+        {{"type": "TYPE_HERE", "value": 0, "unit": "UNIT_HERE", "confidence": 0.75, "source": "Description of where you found this", "location": "Location on drawing", "notes": "Additional context"}}
     ],
     "overall_confidence": 0.75,
-    "notes": "Extracted building dimensions from floor plan to estimate roof area"
-}"""
+    "notes": "Description of what was found"
+}}"""
 
 
 # ==========================================================
@@ -232,8 +311,8 @@ def parse_vision_response(response_text: str) -> dict:
         return {"error": "Failed to parse JSON", "raw_response": response_text[:500]}
 
 
-def build_measurement_prompt_with_scale(scale_info: dict) -> str:
-    """Build measurement extraction prompt with scale context."""
+def build_prompt_for_page_type(page_type: str, scale_info: dict) -> str:
+    """Build the appropriate extraction prompt based on page type."""
     if scale_info and scale_info.get("scale_found"):
         scale_context = (
             f"IMPORTANT SCALE INFORMATION:\n"
@@ -248,25 +327,34 @@ def build_measurement_prompt_with_scale(scale_info: dict) -> str:
             "Use ONLY dimensions that are explicitly labeled on the plan.\n"
             "Do NOT estimate measurements from the image size.\n"
             "If no dimensions are labeled, set confidence to 0.3 or lower.\n"
-            "However, you CAN still count items (drains, penetrations, etc.) regardless of scale."
+            "However, you CAN still count items (drains, pipes, etc.) regardless of scale."
         )
-    return MEASUREMENT_EXTRACTION_PROMPT.replace("{scale_context}", scale_context)
+
+    # Select prompt based on page type
+    if page_type in ("slab_plan", "foundation"):
+        prompt_template = SLAB_PLAN_EXTRACTION_PROMPT
+    elif page_type == "roof_plan":
+        prompt_template = ROOF_PLAN_EXTRACTION_PROMPT
+    elif page_type == "elevation":
+        prompt_template = ELEVATION_EXTRACTION_PROMPT
+    elif page_type == "floor_plan":
+        # Floor plans can have building dimensions like slab plans
+        prompt_template = SLAB_PLAN_EXTRACTION_PROMPT
+    else:
+        prompt_template = GENERAL_EXTRACTION_PROMPT
+
+    return prompt_template.replace("{scale_context}", scale_context)
+
+
+# Keep legacy functions for backward compatibility
+def build_measurement_prompt_with_scale(scale_info: dict) -> str:
+    """Build measurement extraction prompt with scale context (legacy)."""
+    return build_prompt_for_page_type("roof_plan", scale_info)
 
 
 def build_bidset_prompt_with_scale(scale_info: dict) -> str:
-    """Build the aggressive bid set extraction prompt with scale context."""
-    if scale_info and scale_info.get("scale_found"):
-        scale_context = (
-            f"SCALE: {scale_info.get('scale_notation', 'unknown')} "
-            f"(ratio 1:{scale_info.get('scale_ratio', 'unknown')})\n"
-            f"Use this to convert drawn dimensions to real dimensions."
-        )
-    else:
-        scale_context = (
-            "No scale detected. Use ONLY labeled dimensions (numbers on the drawing).\n"
-            "You CAN still count items and read labeled dimensions regardless of scale."
-        )
-    return BID_SET_EXTRACTION_PROMPT.replace("{scale_context}", scale_context)
+    """Build aggressive bid set prompt with scale context (legacy)."""
+    return build_prompt_for_page_type("general", scale_info)
 
 
 # ==========================================================
@@ -275,6 +363,20 @@ def build_bidset_prompt_with_scale(scale_info: dict) -> str:
 
 SANITY_LIMITS = {
     "roof_area": {"min": 100, "max": 1000000, "unit": "sqft"},
+    "parapet_wall": {"min": 10, "max": 50000, "unit": "lnft"},
+    "coping": {"min": 10, "max": 50000, "unit": "lnft"},
+    "roof_drain": {"min": 0, "max": 200, "unit": "each"},
+    "scupper": {"min": 0, "max": 200, "unit": "each"},
+    "pitch_pan": {"min": 0, "max": 200, "unit": "each"},
+    "pipe": {"min": 0, "max": 200, "unit": "each"},
+    "curb": {"min": 0, "max": 5000, "unit": "lnft"},
+    "parapet_flashing": {"min": 1, "max": 120, "unit": "inches"},
+    "parapet_flashing_low": {"min": 1, "max": 120, "unit": "inches"},
+    "parapet_flashing_mid": {"min": 1, "max": 120, "unit": "inches"},
+    "parapet_flashing_high": {"min": 1, "max": 120, "unit": "inches"},
+    "collector_head": {"min": 0, "max": 100, "unit": "each"},
+    "downspout": {"min": 0, "max": 5000, "unit": "lnft"},
+    # Legacy types still supported
     "perimeter": {"min": 40, "max": 50000, "unit": "lnft"},
     "penetration": {"min": 0, "max": 200, "unit": "each"},
     "flashing": {"min": 0, "max": 100000, "unit": "lnft"},
