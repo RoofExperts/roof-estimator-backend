@@ -103,15 +103,27 @@ def reanalyze_plan(
     extractions = db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id
     ).all()
+
+    # Collect condition IDs to delete, then null out FK references first
+    condition_ids_to_delete = set()
     for ext in extractions:
         if ext.condition_id:
-            # Delete any estimate line items linked to this condition first
-            db.query(EstimateLineItem).filter(
-                EstimateLineItem.condition_id == ext.condition_id
-            ).delete()
-            cond = db.query(RoofCondition).filter(RoofCondition.id == ext.condition_id).first()
-            if cond:
-                db.delete(cond)
+            condition_ids_to_delete.add(ext.condition_id)
+            ext.condition_id = None
+    db.flush()  # Null out FKs before deleting
+
+    # Now safe to delete conditions (no more FK references)
+    for cid in condition_ids_to_delete:
+        # Delete estimate line items first
+        db.query(EstimateLineItem).filter(
+            EstimateLineItem.condition_id == cid
+        ).delete()
+        cond = db.query(RoofCondition).filter(RoofCondition.id == cid).first()
+        if cond:
+            db.delete(cond)
+
+    # Delete the extractions
+    for ext in extractions:
         db.delete(ext)
 
     # Clear existing page analyses
