@@ -11,6 +11,21 @@ from pydantic import BaseModel
 from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
 from spec_ai import analyze_spec_text_from_pdf
 
+# Debug: Return actual error details for 500 errors
+import traceback
+from starlette.requests import Request
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def debug_exception_handler(request: Request, exc: Exception):
+    tb = traceback.format_exc()
+    print(f"[ERROR] {request.url}: {exc}\n{tb}")
+    return JSONResponse(
+        status_code=500,
+        content={"detail": str(exc), "traceback": tb[-2000:]}
+    )
+
+
 # Phase 1: Condition-based estimating engineh
 from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
 from conditions_router import router as conditions_router
