@@ -3,6 +3,7 @@ Core AI Vision analysis engine for reading architectural roof plans.
 Converts PDF pages to images, sends to GPT-4o vision, extracts measurements,
 and auto-creates RoofCondition records.
 """
+
 import os
 import io
 import json
@@ -11,6 +12,7 @@ import fitz  # PyMuPDF
 from PIL import Image
 from openai import OpenAI
 from sqlalchemy.orm import Session
+
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from conditions_models import RoofCondition
@@ -28,6 +30,7 @@ MAX_PAGES = 20
 IMAGE_DPI = 150
 MAX_IMAGE_SIZE_MB = 4.0
 VISION_MODEL = "gpt-4o"
+MAX_EXTRACTION_PAGES = 5  # Analyze up to 5 pages for measurements
 
 
 def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
@@ -35,6 +38,7 @@ def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
     doc = fitz.open(file_path)
     page_count = min(len(doc), max_pages)
     images = []
+
     for page_num in range(page_count):
         page = doc[page_num]
         zoom = IMAGE_DPI / 72
@@ -62,6 +66,7 @@ def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str
         if size_mb <= max_size_mb:
             return base64.b64encode(buffer.getvalue()).decode("utf-8")
         quality -= 10
+
     img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)
     buffer = io.BytesIO()
     img.save(buffer, format="JPEG", quality=60)
@@ -119,16 +124,19 @@ def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> l
     extractions = db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id
     ).all()
+
     created_conditions = []
     for ext in extractions:
         mapping = EXTRACTION_TO_CONDITION.get(ext.extraction_type)
         if not mapping:
             continue
+
         description = f"[AI Vision] {ext.extraction_type}"
         if ext.location_on_plan:
             description += f" - {ext.location_on_plan}"
         if ext.confidence_score:
             description += f" (confidence: {ext.confidence_score:.0%})"
+
         condition = RoofCondition(
             project_id=project_id,
             condition_type=mapping["condition_type"],
@@ -141,8 +149,44 @@ def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> l
         db.flush()
         ext.condition_id = condition.id
         created_conditions.append(condition.id)
+
     db.commit()
     return created_conditions
+
+
+def select_pages_for_extraction(page_images: list, roof_pages: list) -> list:
+    """Select the best pages to try extracting measurements from.
+
+    Strategy:
+    1. Use roof-relevant pages first (up to MAX_EXTRACTION_PAGES)
+    2. If no roof pages, use a smart fallback: skip first 2 pages (usually
+       cover/index) and try pages 3 onward, plus add pages from the middle
+       and end of the set where roof plans typically appear.
+    """
+    if roof_pages:
+        return roof_pages[:MAX_EXTRACTION_PAGES]
+
+    # Smart fallback: commercial bid sets often have roof plans in the
+    # second half (A5.x sheets). Skip cover pages (1-2).
+    total = len(page_images)
+    fallback_indices = set()
+
+    # Skip page 1-2 (cover, index). Start from page 3.
+    for i in range(2, min(total, 5)):  # pages 3-5
+        fallback_indices.add(i)
+
+    # Add pages from ~60-80% through the set (where A5.x roof sheets usually are)
+    mid_start = int(total * 0.5)
+    mid_end = int(total * 0.85)
+    for i in range(mid_start, min(mid_end + 1, total)):
+        fallback_indices.add(i)
+        if len(fallback_indices) >= MAX_EXTRACTION_PAGES + 3:
+            break
+
+    # Convert to sorted list and limit
+    fallback_pages = [page_images[i] for i in sorted(fallback_indices) if i < total]
+    return fallback_pages[:MAX_EXTRACTION_PAGES]
+
 
 def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Session) -> dict:
     """Full analysis pipeline for a roof plan PDF."""
@@ -173,10 +217,23 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             page_num = page_data["page_number"]
             print(f"[Vision] Classifying page {page_num}...")
             classification = classify_page(page_data["image_base64"])
+
             page_type = classification.get("page_type", "unknown")
             is_relevant = classification.get("is_roof_relevant", False)
+
+            # Force roof_plan and structural pages as relevant
             if page_type in ("roof_plan", "structural"):
                 is_relevant = True
+
+            # Also consider elevation and detail pages as potentially relevant
+            if page_type in ("elevation", "detail", "mechanical") and not is_relevant:
+                # Check if the notes mention roof-related content
+                notes = classification.get("notes", "").lower()
+                title = classification.get("title_block_text", "").lower()
+                if any(kw in notes + " " + title for kw in ["roof", "parapet", "flashing", "drain", "slope", "curb", "coping", "membrane"]):
+                    is_relevant = True
+                    print(f"[Vision]   -> Upgraded page {page_num} to roof-relevant based on content keywords")
+
             page_analysis = PlanPageAnalysis(
                 plan_file_id=plan_file_id,
                 page_number=page_num,
@@ -186,47 +243,100 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 processing_status="completed",
             )
             db.add(page_analysis)
+
             if is_relevant:
                 roof_pages.append(page_data)
+                print(f"[Vision]   -> Page {page_num}: {page_type} (ROOF RELEVANT)")
+            else:
+                print(f"[Vision]   -> Page {page_num}: {page_type}")
+
         db.commit()
 
+        # Step 2b: Select pages for extraction
+        pages_to_extract = select_pages_for_extraction(page_images, roof_pages)
         if not roof_pages:
-            print("[Vision] No roof pages found, using first 3 pages as fallback")
-            roof_pages = page_images[:3]
+            fallback_page_nums = [p["page_number"] for p in pages_to_extract]
+            print(f"[Vision] No roof pages classified - using smart fallback pages: {fallback_page_nums}")
 
-        # Step 3: Detect scale
+        # Step 3: Detect scale (try multiple pages if needed)
         print("[Vision] Detecting scale...")
-        scale_info = detect_scale(roof_pages[0]["image_base64"])
-        if scale_info.get("scale_found"):
-            plan_file.detected_scale = scale_info.get("scale_notation")
-            plan_file.scale_confidence = scale_info.get("confidence", 0.0)
-            db.commit()
+        scale_info = {"scale_found": False}
+        for page_data in pages_to_extract[:3]:
+            scale_info = detect_scale(page_data["image_base64"])
+            if scale_info.get("scale_found"):
+                plan_file.detected_scale = scale_info.get("scale_notation")
+                plan_file.scale_confidence = scale_info.get("confidence", 0.0)
+                print(f"[Vision]   Scale found on page {page_data['page_number']}: {scale_info.get('scale_notation')}")
+                db.commit()
+                break
+            else:
+                print(f"[Vision]   No scale found on page {page_data['page_number']}, trying next...")
 
-        # Step 4: Extract measurements from best roof page
-        best_page = roof_pages[0]
-        print(f"[Vision] Extracting measurements from page {best_page['page_number']}...")
-        measurements_result = extract_measurements(best_page["image_base64"], scale_info)
+        # Step 4: Extract measurements from multiple pages
+        all_measurements = []
+        pages_with_extractions = []
 
-        if "error" in measurements_result:
-            plan_file.upload_status = "failed"
-            plan_file.error_message = f"Extraction failed: {measurements_result.get('error')}"
-            db.commit()
-            return {"status": "error", "message": plan_file.error_message}
+        for page_data in pages_to_extract:
+            page_num = page_data["page_number"]
+            print(f"[Vision] Extracting measurements from page {page_num}...")
+            measurements_result = extract_measurements(page_data["image_base64"], scale_info)
 
-        # Step 5: Store extractions
-        measurements = measurements_result.get("measurements", [])
-        extraction_count = 0
-        for m in measurements:
+            if "error" in measurements_result:
+                print(f"[Vision]   Page {page_num}: extraction error - {measurements_result.get('error')}")
+                continue
+
+            page_measurements = measurements_result.get("measurements", [])
+            if page_measurements:
+                print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements")
+                for m in page_measurements:
+                    m["_page_number"] = page_num  # Track which page
+                all_measurements.extend(page_measurements)
+                pages_with_extractions.append(page_num)
+            else:
+                print(f"[Vision]   Page {page_num}: no measurements found")
+
+        # If still no measurements and we haven't tried all pages, try remaining
+        if not all_measurements and len(pages_to_extract) < len(page_images):
+            tried_pages = {p["page_number"] for p in pages_to_extract}
+            remaining = [p for p in page_images if p["page_number"] not in tried_pages]
+            print(f"[Vision] No measurements yet - trying {len(remaining)} remaining pages...")
+            for page_data in remaining[:5]:  # Try up to 5 more
+                page_num = page_data["page_number"]
+                print(f"[Vision] Extracting measurements from page {page_num} (extended search)...")
+                measurements_result = extract_measurements(page_data["image_base64"], scale_info)
+                if "error" not in measurements_result:
+                    page_measurements = measurements_result.get("measurements", [])
+                    if page_measurements:
+                        print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements!")
+                        for m in page_measurements:
+                            m["_page_number"] = page_num
+                        all_measurements.extend(page_measurements)
+                        pages_with_extractions.append(page_num)
+                        break  # Found something, stop extended search
+
+        # Step 5: Store extractions (deduplicate by type, keep highest confidence)
+        best_by_type = {}
+        for m in all_measurements:
             ext_type = m.get("type", "custom")
+            confidence = m.get("confidence", 0.5)
+            if ext_type not in best_by_type or confidence > best_by_type[ext_type].get("confidence", 0):
+                best_by_type[ext_type] = m
+
+        extraction_count = 0
+        overall_confidence = 0.0
+        for ext_type, m in best_by_type.items():
             value = m.get("value", 0)
             unit = m.get("unit", "each")
+
             is_valid, conf_multiplier, warning = validate_extraction(ext_type, value)
             confidence = m.get("confidence", 0.5) * conf_multiplier
+
             if not is_valid:
                 print(f"[Vision] Warning: {warning}")
+
             extraction = VisionExtraction(
                 plan_file_id=plan_file_id,
-                page_number=best_page["page_number"],
+                page_number=m.get("_page_number", 1),
                 extraction_type=ext_type,
                 measurement_value=value,
                 measurement_unit=unit,
@@ -237,7 +347,12 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             )
             db.add(extraction)
             extraction_count += 1
+            overall_confidence += confidence
+
         db.commit()
+
+        if extraction_count > 0:
+            overall_confidence = overall_confidence / extraction_count
 
         # Step 6: Auto-create conditions
         print("[Vision] Auto-creating conditions...")
@@ -251,12 +366,13 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             "plan_file_id": plan_file_id,
             "pages_analyzed": len(page_images),
             "roof_pages_found": len(roof_pages),
+            "pages_extracted_from": pages_with_extractions,
             "scale_detected": scale_info.get("scale_found", False),
             "scale": scale_info.get("scale_notation"),
             "extractions_count": extraction_count,
             "conditions_created": len(created_condition_ids),
             "condition_ids": created_condition_ids,
-            "overall_confidence": measurements_result.get("overall_confidence", 0.0),
+            "overall_confidence": overall_confidence,
         }
         print(f"[Vision] Analysis complete: {result}")
         return result
