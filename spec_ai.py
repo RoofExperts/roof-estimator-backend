@@ -11,7 +11,7 @@ from openai import OpenAI
 # ==========================================================
 # Process page-by-page to avoid loading entire PDF into memory.
 # Collect pages with actual roofing spec content (not just TOC).
-MAX_DIVISION_CHARS = 12000  # More than enough; we truncate to 8000 for AI
+MAX_DIVISION_CHARS = 50000  # Collect generously; we rank + truncate later
 
 # Roofing section numbers (CSI Division 07 sections with actual specs)
 ROOFING_SECTION_PATTERN = r"(?:SECTION\s+)?0?7\s*[2-9]\d\s*\d{2}"
@@ -71,7 +71,7 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
     Uses two-tier keyword system: roofing-specific + support keywords.
     Memory-efficient: only keeps relevant pages in memory.
     """
-    collected_pages = []
+    collected_pages = []  # list of (score, page_num, text) tuples
     collected_chars = 0
     total_pages = 0
 
@@ -171,9 +171,16 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 print(f"[spec_ai] Page {i+1} collected as continuation (support={support_hits})")
 
             if is_spec_page:
-                collected_pages.append(text)
+                # Score pages so membrane-heavy pages get priority over flashing/coping
+                MEMBRANE_BOOST = ["TPO", "EPDM", "PVC", "SINGLE-PLY", "ROOFING MEMBRANE",
+                                  "FULLY ADHERED", "MECHANICALLY ATTACHED", "COVER BOARD",
+                                  "POLYISOCYANURATE", "POLYISO", "ROOF SYSTEM", "MIL",
+                                  "ROOF INSULATION", "TAPERED INSULATION"]
+                membrane_hits = sum(1 for kw in MEMBRANE_BOOST if kw in text_upper)
+                page_score = len(specific_hits) + membrane_hits * 2 + (5 if has_div07_header else 0)
+                collected_pages.append((page_score, i+1, text))
                 collected_chars += len(text)
-                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, div07_header={has_div07_header}")
+                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, support_count={len(support_hits)}, div07_header={has_div07_header}, score={page_score}")
                 print(f"[spec_ai]   First 200 chars: {text[:200]}")
             else:
                 # Log pages that were close but didn't qualify
@@ -194,7 +201,13 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
         print(f"[spec_ai] Trying fallback with relaxed criteria...")
         return _fallback_roofing_extract(file_path)
 
-    result = "\n".join(collected_pages)
+    # Sort pages by relevance score (highest first) so membrane-heavy pages
+    # get priority over coping/flashing when we truncate for OpenAI
+    collected_pages.sort(key=lambda x: x[0], reverse=True)
+    for score, pg, _ in collected_pages:
+        print(f"[spec_ai]   Ranked: page {pg} score={score}")
+
+    result = "\n".join(text for _, _, text in collected_pages)
     print(f"[spec_ai] Extracted {len(result)} chars from {len(collected_pages)} spec pages")
     print(f"[spec_ai] First 300 chars: {result[:300]}")
     return result
