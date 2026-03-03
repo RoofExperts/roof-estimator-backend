@@ -263,7 +263,7 @@ def analyze_spec_text_from_pdf(file_path: str):
         return {"error": "Division 07 not found in spec"}
 
     # Prevent timeout / memory spikes
-    MAX_CHARS = 8000
+    MAX_CHARS = 16000
     division_7_text = division_7_text[:MAX_CHARS]
 
     print(f"[spec_ai] Sending {len(division_7_text)} chars to OpenAI")
