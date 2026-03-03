@@ -108,10 +108,16 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                 text_upper
             )
             if non_roofing_header:
-                print(f"[spec_ai] Skipping page {i+1}: primary section is non-roofing ({non_roofing_header.group().strip()})")
-                del text, text_upper
-                gc.collect()
-                continue
+                # Before skipping, check if this page ALSO has roofing content
+                # (common in PDFs where header/footer shows a different section)
+                roofing_signal = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
+                if len(roofing_signal) < 3:
+                    print(f"[spec_ai] Skipping page {i+1}: primary section is non-roofing ({non_roofing_header.group().strip()})")
+                    del text, text_upper
+                    gc.collect()
+                    continue
+                else:
+                    print(f"[spec_ai] Page {i+1} has non-roofing header but {len(roofing_signal)} roofing keywords - keeping")
 
             # Skip non-roofing DIVISION 07 subsections (EIFS, waterproofing, fireproofing, sealants)
             # These are 07 1X, 07 2X, 07 8X, 07 9X - NOT roofing
@@ -142,11 +148,11 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
             # Count TIER 2 (support) keyword hits
             support_hits = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
 
-            # Page must have at least 1 roofing-SPECIFIC keyword to be collected
-            # Then we look at total signal strength:
+            # Collection rules (from strongest to weakest signal):
             #   - Div 07 section header + 1 specific = collect
             #   - 2+ specific keywords = collect
             #   - 1 specific + 2 support = collect
+            #   - 3+ support keywords (continuation pages with details like MIL, WARRANTY, etc.)
             has_specific = len(specific_hits) >= 1
             is_spec_page = False
 
@@ -157,6 +163,12 @@ def extract_division_7_from_pdf(file_path: str) -> str | None:
                     is_spec_page = True
                 elif len(specific_hits) >= 1 and len(support_hits) >= 2:
                     is_spec_page = True
+
+            # Also collect continuation pages: no specific keywords but lots of
+            # support keywords (these have details like thickness, warranty, etc.)
+            if not is_spec_page and len(support_hits) >= 3:
+                is_spec_page = True
+                print(f"[spec_ai] Page {i+1} collected as continuation (support={support_hits})")
 
             if is_spec_page:
                 collected_pages.append(text)
