@@ -626,7 +626,7 @@ def build_page_5(data, styles):
         "With decades of combined experience, our team specializes in new construction, "
         "re-roofing, roof repairs, and preventive maintenance programs for commercial and "
         "industrial buildings."
-    ))
+    )
     elements.append(Paragraph(about_text, styles['BodyText2']))
     elements.append(Spacer(1, 8))
 
