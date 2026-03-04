@@ -22,6 +22,7 @@ from conditions_models import (
 from estimate_engine import calculate_estimate, get_estimate_summary
 from estimate_engine import get_available_condition_types, get_materials_for_condition
 from condition_builder import smart_build_conditions
+from takeoff_engine import generate_takeoff
 
 
 # ============================================================================
@@ -479,6 +480,29 @@ def smart_build(project_id: int, db: Session = Depends(get_db)):
     Call this AFTER both spec analysis and plan analysis are complete.
     """
     result = smart_build_conditions(project_id, db)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("message"))
+    return result
+
+
+# ============================================================================
+# TAKEOFF ENDPOINT
+# ============================================================================
+
+@router.get("/projects/{project_id}/takeoff")
+def get_takeoff(project_id: int, db: Session = Depends(get_db)):
+    """
+    Generate a professional material takeoff from conditions + spec data.
+
+    Returns structured data matching a 4-tab spreadsheet:
+    1. Project Summary - system specs, area, cost totals
+    2. Flat Roof Materials - membrane, insulation, fasteners, wall flashing
+    3. Roof Related Metals - drainage, gutters, coping
+    4. Labor & General Conditions - crew labor, equipment, permits
+
+    Each line item has: description, qty, unit, unit_cost, extended_cost
+    """
+    result = generate_takeoff(project_id, db)
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
