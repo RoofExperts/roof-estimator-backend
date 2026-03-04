@@ -9,11 +9,13 @@ This module provides all API endpoints for:
 - Retrieving estimate summaries
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 import datetime
+import csv
+import io
 
 from database import SessionLocal
 from conditions_models import (
@@ -397,6 +399,131 @@ def list_cost_items(
     if material_category:
         query = query.filter(CostDatabaseItem.material_category == material_category)
     return query.order_by(CostDatabaseItem.material_name).all()
+
+
+@router.post("/cost-database/upload-pricing")
+def upload_pricing_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """
+    Upload vendor pricing from CSV or Excel file.
+
+    Expected columns:
+    - material_name (required): Name of material to match
+    - unit_cost (required): Cost per unit
+    - labor_cost_per_unit (optional): Labor cost per unit
+    - manufacturer (optional): Manufacturer name
+
+    Matches materials by case-insensitive partial match of material_name.
+    Returns summary of matched/unmatched items and update counts.
+    """
+    try:
+        # Read file content
+        content = file.file.read()
+        filename = file.filename.lower()
+
+        rows = []
+
+        # Parse CSV or Excel
+        if filename.endswith('.csv'):
+            # Parse CSV
+            text_content = content.decode('utf-8')
+            csv_reader = csv.DictReader(io.StringIO(text_content))
+            rows = list(csv_reader)
+        elif filename.endswith(('.xlsx', '.xls')):
+            # Parse Excel
+            try:
+                import openpyxl
+            except ImportError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Excel support requires openpyxl. Please upload a CSV file instead or install openpyxl."
+                )
+
+            from openpyxl import load_workbook
+            workbook = load_workbook(io.BytesIO(content))
+            worksheet = workbook.active
+
+            # Get headers from first row
+            headers = []
+            for cell in worksheet[1]:
+                headers.append(cell.value)
+
+            # Read data rows
+            for row in worksheet.iter_rows(min_row=2, values_only=False):
+                row_data = {}
+                for idx, cell in enumerate(row):
+                    if idx < len(headers):
+                        row_data[headers[idx]] = cell.value
+                rows.append(row_data)
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="File must be CSV or Excel (.csv, .xlsx, .xls)"
+            )
+
+        if not rows:
+            raise HTTPException(status_code=400, detail="File is empty")
+
+        # Process rows
+        matched = 0
+        updated = 0
+        unmatched_items = []
+
+        for row in rows:
+            if not row:
+                continue
+
+            # Extract required fields
+            material_name = row.get('material_name') or row.get('Material Name')
+            unit_cost = row.get('unit_cost') or row.get('Unit Cost')
+
+            if not material_name or unit_cost is None:
+                continue
+
+            # Convert unit_cost to float
+            try:
+                unit_cost = float(unit_cost)
+            except (ValueError, TypeError):
+                unmatched_items.append(str(material_name))
+                continue
+
+            # Get optional fields
+            labor_cost_per_unit = row.get('labor_cost_per_unit') or row.get('Labor Cost Per Unit')
+            if labor_cost_per_unit is not None:
+                try:
+                    labor_cost_per_unit = float(labor_cost_per_unit)
+                except (ValueError, TypeError):
+                    labor_cost_per_unit = None
+
+            # Find matching CostDatabaseItem by case-insensitive partial match
+            matching_item = db.query(CostDatabaseItem).filter(
+                CostDatabaseItem.material_name.ilike(f'%{material_name}%')
+            ).first()
+
+            if matching_item:
+                matched += 1
+                # Update the item
+                matching_item.unit_cost = unit_cost
+                if labor_cost_per_unit is not None:
+                    matching_item.labor_cost_per_unit = labor_cost_per_unit
+                matching_item.last_updated = datetime.datetime.utcnow()
+                updated += 1
+            else:
+                unmatched_items.append(str(material_name))
+
+        db.commit()
+
+        return {
+            "total_rows": len(rows),
+            "matched": matched,
+            "updated": updated,
+            "unmatched_items": unmatched_items
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=f"Error processing file: {str(e)}")
 
 
 @router.get("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
