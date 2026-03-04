@@ -684,14 +684,14 @@ def build_terms_section(data, styles):
     elements.append(Paragraph("TERMS &amp; CONDITIONS", styles['SectionHeading']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=TABLE_BORDER, spaceAfter=6))
 
-    terms = data.get("terms", [
+    terms = data.get("terms") or [
         "Payment terms: 50% deposit upon acceptance, balance due upon completion.",
         "Work to commence within 2-4 weeks of signed acceptance, weather permitting.",
         "All work performed in accordance with local building codes and manufacturer specifications.",
         "Warranty: Manufacturer warranty on materials; 2-year workmanship warranty.",
         "Any changes to scope of work will be documented via written change order.",
         "This proposal is valid for 30 days from the date above.",
-    ])
+    ]
     for i, term in enumerate(terms, 1):
         elements.append(Paragraph(f"{i}. {term}", styles['SmallText']))
         elements.append(Spacer(1, 2))

@@ -179,7 +179,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
 
         # Totals
         "grand_total": request.grand_total,
-        "terms": request.terms if request.terms else None,
+        "terms": request.terms if request.terms else [],
     }
 
     try:
