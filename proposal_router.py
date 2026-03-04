@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import datetime
 import io
+import traceback
 
 from database import get_db
 from models import Project
@@ -133,13 +134,13 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         "proposal_date": request.proposal_date or datetime.date.today().strftime("%B %d, %Y"),
         "valid_until": request.valid_until,
 
-        "prepared_for": request.prepared_for.dict(),
+        "prepared_for": request.prepared_for.model_dump(),
         "company_info": company_info,
 
         # Page 1
         "roofing_system_description": request.roofing_system_description,
-        "roofing_items": [item.dict() for item in request.roofing_items],
-        "roofing_metals": [item.dict() for item in request.roofing_metals],
+        "roofing_items": [item.model_dump() for item in request.roofing_items],
+        "roofing_metals": [item.model_dump() for item in request.roofing_metals],
         "roofing_total": request.roofing_total,
         "roofing_exclusions": request.roofing_exclusions,
         "roofing_notes": request.roofing_notes,
@@ -148,7 +149,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         "include_metal_roof": request.include_metal_roof,
         "metal_roof_type": request.metal_roof_type,
         "metal_roof_description": request.metal_roof_description,
-        "metal_roof_items": [item.dict() for item in request.metal_roof_items],
+        "metal_roof_items": [item.model_dump() for item in request.metal_roof_items],
         "metal_roof_total": request.metal_roof_total,
         "metal_roof_exclusions": request.metal_roof_exclusions,
         "metal_roof_notes": request.metal_roof_notes,
@@ -159,11 +160,11 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
             {
                 "title": s.title,
                 "description": s.description,
-                "items": [i.dict() for i in s.items],
+                "items": [i.model_dump() for i in s.items],
             }
             for s in request.wall_panel_sections
         ],
-        "wall_panel_items": [item.dict() for item in request.wall_panel_items],
+        "wall_panel_items": [item.model_dump() for item in request.wall_panel_items],
         "wall_panel_total": request.wall_panel_total,
         "wall_panel_exclusions": request.wall_panel_exclusions,
         "wall_panel_notes": request.wall_panel_notes,
@@ -171,7 +172,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         # Page 4
         "include_awnings": request.include_awnings,
         "awning_description": request.awning_description,
-        "awning_items": [item.dict() for item in request.awning_items],
+        "awning_items": [item.model_dump() for item in request.awning_items],
         "awning_total": request.awning_total,
         "awning_exclusions": request.awning_exclusions,
         "awning_notes": request.awning_notes,
@@ -184,6 +185,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
     try:
         pdf_bytes = generate_proposal_pdf(data)
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
 
     # Return as downloadable PDF
