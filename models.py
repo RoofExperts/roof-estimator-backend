@@ -180,3 +180,23 @@ class SavedProposal(Base):
     status = Column(String, default="draft")  # draft, sent, accepted, declined
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+# =============================
+# SAVED ESTIMATE MODEL
+# =============================
+class SavedEstimate(Base):
+    """Persisted takeoff / estimate data for a project. One active estimate per project."""
+    __tablename__ = "saved_estimates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    version = Column(Integer, default=1)
+    estimate_data = Column(Text, nullable=False)  # Full takeoff JSON blob
+    grand_total = Column(Float, nullable=True)
+    system_type = Column(String, nullable=True)
+    roof_area_sf = Column(Float, nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

@@ -23,6 +23,7 @@ from auth import get_current_user
 from conditions_models import (
     RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
 )
+from models import SavedEstimate
 from estimate_engine import calculate_estimate, get_estimate_summary
 from estimate_engine import get_available_condition_types, get_materials_for_condition
 from condition_builder import smart_build_conditions
@@ -729,3 +730,110 @@ def get_takeoff(
     if result.get("status") == "error":
         raise HTTPException(status_code=400, detail=result.get("message"))
     return result
+
+
+# ============================================================================
+# SAVED ESTIMATES — PERSIST & LOAD TAKEOFF DATA
+# ============================================================================
+
+class SaveEstimateRequest(BaseModel):
+    estimate_data: dict
+
+
+@router.post("/projects/{project_id}/save-estimate")
+def save_estimate(
+    project_id: int,
+    body: SaveEstimateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Save (or update) the takeoff/estimate for a project.
+    Upserts — one saved estimate per project (latest version wins).
+    """
+    import json
+    org_id = current_user["org_id"]
+    data = body.estimate_data
+
+    # Extract key summary fields for quick access
+    grand_total = None
+    system_type = None
+    roof_area_sf = None
+    summary = data.get("summary", {})
+    if summary:
+        cost_summary = summary.get("cost_summary", {})
+        grand_total = cost_summary.get("grand_total")
+        system_type = summary.get("system_type")
+        roof_area_sf = summary.get("roof_area_sf")
+
+    # Check for existing saved estimate
+    existing = db.query(SavedEstimate).filter(
+        SavedEstimate.project_id == project_id,
+        SavedEstimate.org_id == org_id,
+    ).first()
+
+    if existing:
+        existing.estimate_data = json.dumps(data)
+        existing.grand_total = grand_total
+        existing.system_type = system_type
+        existing.roof_area_sf = roof_area_sf
+        existing.version = (existing.version or 1) + 1
+        existing.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return {
+            "message": "Estimate updated",
+            "id": existing.id,
+            "version": existing.version,
+            "grand_total": existing.grand_total,
+        }
+    else:
+        saved = SavedEstimate(
+            org_id=org_id,
+            project_id=project_id,
+            version=1,
+            estimate_data=json.dumps(data),
+            grand_total=grand_total,
+            system_type=system_type,
+            roof_area_sf=roof_area_sf,
+            created_by=current_user["user_id"],
+        )
+        db.add(saved)
+        db.commit()
+        db.refresh(saved)
+        return {
+            "message": "Estimate saved",
+            "id": saved.id,
+            "version": saved.version,
+            "grand_total": saved.grand_total,
+        }
+
+
+@router.get("/projects/{project_id}/saved-estimate")
+def get_saved_estimate(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Load the saved estimate for a project (if any)."""
+    import json
+    org_id = current_user["org_id"]
+
+    saved = db.query(SavedEstimate).filter(
+        SavedEstimate.project_id == project_id,
+        SavedEstimate.org_id == org_id,
+    ).first()
+
+    if not saved:
+        return {"saved": False}
+
+    return {
+        "saved": True,
+        "id": saved.id,
+        "version": saved.version,
+        "grand_total": saved.grand_total,
+        "system_type": saved.system_type,
+        "roof_area_sf": saved.roof_area_sf,
+        "updated_at": str(saved.updated_at),
+        "estimate_data": json.loads(saved.estimate_data),
+    }
