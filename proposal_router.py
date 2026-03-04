@@ -11,8 +11,10 @@ import datetime
 import io
 import traceback
 
+import json
+
 from database import get_db
-from models import Project, CompanySettings
+from models import Project, CompanySettings, Customer, SavedProposal
 from conditions_models import RoofCondition, EstimateLineItem
 from proposal_generator import generate_proposal_pdf
 from admin_router import get_or_create_settings, _parse_json_list
@@ -273,3 +275,276 @@ async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
         "company_info": _get_company_info_dict(db),
         "default_terms": _get_default_terms(db),
     }
+
+
+# ── Saved Proposal Models ────────────────────────────────────
+
+class SaveProposalRequest(BaseModel):
+    proposal_name: Optional[str] = None
+    customer_id: Optional[int] = None
+    proposal_data: Dict[str, Any]  # Full form state as JSON
+
+
+class SavedProposalResponse(BaseModel):
+    id: int
+    project_id: int
+    customer_id: Optional[int]
+    proposal_number: Optional[str]
+    proposal_name: Optional[str]
+    status: str
+    created_at: datetime.datetime
+    updated_at: datetime.datetime
+    # Include customer info for display
+    customer_company: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class BatchProposalRequest(BaseModel):
+    """Generate the same proposal for multiple customers."""
+    customer_ids: List[int]
+    proposal_data: Dict[str, Any]
+
+
+# ── Save / Load Proposal Endpoints ───────────────────────────
+
+@proposal_router.post("/projects/{project_id}/proposals")
+async def save_proposal(project_id: int, request: SaveProposalRequest, db: Session = Depends(get_db)):
+    """Save a proposal draft so it can be edited later."""
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Validate customer if provided
+    if request.customer_id:
+        customer = db.query(Customer).filter(Customer.id == request.customer_id).first()
+        if not customer:
+            raise HTTPException(status_code=404, detail="Customer not found")
+
+    proposal_number = request.proposal_data.get("proposal_number", f"P-{project_id:04d}")
+
+    saved = SavedProposal(
+        project_id=project_id,
+        customer_id=request.customer_id,
+        proposal_number=proposal_number,
+        proposal_name=request.proposal_name or f"Proposal for {project.project_name}",
+        proposal_data=json.dumps(request.proposal_data),
+        status="draft",
+    )
+    db.add(saved)
+    db.commit()
+    db.refresh(saved)
+
+    return {"id": saved.id, "message": "Proposal saved successfully"}
+
+
+@proposal_router.put("/proposals/{proposal_id}")
+async def update_saved_proposal(proposal_id: int, request: SaveProposalRequest, db: Session = Depends(get_db)):
+    """Update an existing saved proposal."""
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+
+    if request.customer_id is not None:
+        saved.customer_id = request.customer_id
+    if request.proposal_name is not None:
+        saved.proposal_name = request.proposal_name
+    saved.proposal_data = json.dumps(request.proposal_data)
+    saved.proposal_number = request.proposal_data.get("proposal_number", saved.proposal_number)
+
+    db.commit()
+    db.refresh(saved)
+
+    return {"id": saved.id, "message": "Proposal updated successfully"}
+
+
+@proposal_router.get("/projects/{project_id}/proposals")
+async def list_saved_proposals(project_id: int, db: Session = Depends(get_db)):
+    """List all saved proposals for a project."""
+    proposals = db.query(SavedProposal).filter(
+        SavedProposal.project_id == project_id
+    ).order_by(SavedProposal.updated_at.desc()).all()
+
+    result = []
+    for p in proposals:
+        customer_company = None
+        if p.customer_id:
+            customer = db.query(Customer).filter(Customer.id == p.customer_id).first()
+            if customer:
+                customer_company = customer.company_name
+
+        result.append({
+            "id": p.id,
+            "project_id": p.project_id,
+            "customer_id": p.customer_id,
+            "proposal_number": p.proposal_number,
+            "proposal_name": p.proposal_name,
+            "status": p.status,
+            "customer_company": customer_company,
+            "created_at": p.created_at.isoformat(),
+            "updated_at": p.updated_at.isoformat(),
+        })
+
+    return result
+
+
+@proposal_router.get("/proposals/{proposal_id}")
+async def get_saved_proposal(proposal_id: int, db: Session = Depends(get_db)):
+    """Get a saved proposal with its full data."""
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+
+    customer_company = None
+    if saved.customer_id:
+        customer = db.query(Customer).filter(Customer.id == saved.customer_id).first()
+        if customer:
+            customer_company = customer.company_name
+
+    return {
+        "id": saved.id,
+        "project_id": saved.project_id,
+        "customer_id": saved.customer_id,
+        "proposal_number": saved.proposal_number,
+        "proposal_name": saved.proposal_name,
+        "status": saved.status,
+        "customer_company": customer_company,
+        "proposal_data": json.loads(saved.proposal_data),
+        "created_at": saved.created_at.isoformat(),
+        "updated_at": saved.updated_at.isoformat(),
+    }
+
+
+@proposal_router.delete("/proposals/{proposal_id}")
+async def delete_saved_proposal(proposal_id: int, db: Session = Depends(get_db)):
+    """Delete a saved proposal."""
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+    db.delete(saved)
+    db.commit()
+    return {"message": "Proposal deleted successfully"}
+
+
+@proposal_router.put("/proposals/{proposal_id}/status")
+async def update_proposal_status(proposal_id: int, status: str, db: Session = Depends(get_db)):
+    """Update proposal status (draft, sent, accepted, declined)."""
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+    if status not in ("draft", "sent", "accepted", "declined"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    saved.status = status
+    db.commit()
+    return {"message": f"Proposal status updated to {status}"}
+
+
+# ── Batch / Multi-Customer Proposal Generation ───────────────
+
+@proposal_router.post("/projects/{project_id}/generate-batch-proposals")
+async def generate_batch_proposals(
+    project_id: int, request: BatchProposalRequest, db: Session = Depends(get_db)
+):
+    """
+    Generate the same proposal PDF for multiple customers.
+    Returns a list of generated PDF download links (saved proposals).
+    """
+    project = db.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    company_info = _get_company_info_dict(db)
+    results = []
+
+    for customer_id in request.customer_ids:
+        customer = db.query(Customer).filter(Customer.id == customer_id).first()
+        if not customer:
+            results.append({"customer_id": customer_id, "error": "Customer not found"})
+            continue
+
+        # Clone proposal data and set this customer's info
+        data = dict(request.proposal_data)
+        data["prepared_for"] = {
+            "company": customer.company_name,
+            "contact_name": customer.contact_name or "",
+            "contact_email": customer.contact_email or "",
+            "contact_phone": customer.contact_phone or "",
+        }
+        data["project_name"] = data.get("project_name") or project.project_name
+        data["project_address"] = data.get("project_address") or project.address or ""
+        proposal_num = data.get("proposal_number", f"P-{project_id:04d}")
+        data["proposal_number"] = proposal_num
+        data["proposal_date"] = data.get("proposal_date") or datetime.date.today().strftime("%B %d, %Y")
+        data["company_info"] = data.get("company_info") or company_info
+        data["terms"] = data.get("terms") or _get_default_terms(db)
+
+        # Save proposal to DB
+        saved = SavedProposal(
+            project_id=project_id,
+            customer_id=customer_id,
+            proposal_number=proposal_num,
+            proposal_name=f"Proposal for {customer.company_name}",
+            proposal_data=json.dumps(data),
+            status="draft",
+        )
+        db.add(saved)
+        db.commit()
+        db.refresh(saved)
+
+        results.append({
+            "customer_id": customer_id,
+            "customer_company": customer.company_name,
+            "proposal_id": saved.id,
+            "status": "created",
+        })
+
+    return {"proposals": results}
+
+
+@proposal_router.get("/proposals/{proposal_id}/generate-pdf")
+async def generate_saved_proposal_pdf(proposal_id: int, db: Session = Depends(get_db)):
+    """Generate a PDF from a saved proposal."""
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    if not saved:
+        raise HTTPException(status_code=404, detail="Saved proposal not found")
+
+    project = db.query(Project).filter(Project.id == saved.project_id).first()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    data = json.loads(saved.proposal_data)
+
+    # Ensure company_info and terms are filled
+    if not data.get("company_info"):
+        data["company_info"] = _get_company_info_dict(db)
+    if not data.get("terms"):
+        data["terms"] = _get_default_terms(db)
+
+    # Fill customer info if linked
+    if saved.customer_id and not data.get("prepared_for", {}).get("company"):
+        customer = db.query(Customer).filter(Customer.id == saved.customer_id).first()
+        if customer:
+            data["prepared_for"] = {
+                "company": customer.company_name,
+                "contact_name": customer.contact_name or "",
+                "contact_email": customer.contact_email or "",
+                "contact_phone": customer.contact_phone or "",
+            }
+
+    try:
+        pdf_bytes = generate_proposal_pdf(data)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {str(e)}")
+
+    filename = f"Proposal_{data.get('proposal_number', 'P-0001')}_{project.project_name.replace(' ', '_')}.pdf"
+
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(pdf_bytes)),
+        }
+    )

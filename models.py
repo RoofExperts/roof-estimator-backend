@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON, Boolean, ForeignKey
 from database import Base
 import datetime
 
@@ -66,4 +66,41 @@ class CompanySettings(Base):
     # Default terms & conditions
     default_terms_json = Column(Text, nullable=True)      # JSON string list
 
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+# =============================
+# CUSTOMER MODEL
+# =============================
+class Customer(Base):
+    """Master customer database for reusable client information."""
+    __tablename__ = "customers"
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_name = Column(String, nullable=False, index=True)
+    contact_name = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    contact_phone = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+# =============================
+# SAVED PROPOSAL MODEL
+# =============================
+class SavedProposal(Base):
+    """Persisted proposal data so proposals can be edited and regenerated."""
+    __tablename__ = "saved_proposals"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=True, index=True)
+    proposal_number = Column(String, nullable=True)
+    proposal_name = Column(String, nullable=True)
+    proposal_data = Column(Text, nullable=False)  # JSON blob of full proposal form state
+    status = Column(String, default="draft")  # draft, sent, accepted, declined
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

@@ -23,6 +23,7 @@ from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from vision_router import router as vision_router
 from proposal_router import proposal_router
 from admin_router import admin_router
+from customer_router import customer_router
 
 import requests
 import tempfile
@@ -85,6 +86,7 @@ app.include_router(conditions_router)
 app.include_router(vision_router)
 app.include_router(proposal_router)
 app.include_router(admin_router)
+app.include_router(customer_router)
 
 
 def get_db():

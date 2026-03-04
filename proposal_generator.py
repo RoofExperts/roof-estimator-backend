@@ -614,11 +614,11 @@ def build_page_4(data, styles):
 def build_page_5(data, styles):
     """Page 5: About Roof Experts"""
     elements = []
+    company = data.get("company_info", {})
+
     elements.append(Spacer(1, 14))
     elements.append(Paragraph(f"ABOUT {company.get('name', 'ROOF EXPERTS').upper()}", styles['PageTitle']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=TABLE_BORDER, spaceAfter=8))
-
-    company = data.get("company_info", {})
 
     about_text = company.get("about_text") or company.get("about") or (
         "Roof Experts is a full-service commercial roofing company providing quality "
