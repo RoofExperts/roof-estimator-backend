@@ -21,6 +21,7 @@ from seed_data import seed_database
 # Phase 2: AI Vision Plan Reader
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from vision_router import router as vision_router
+from proposal_router import proposal_router
 
 import requests
 import tempfile
@@ -78,6 +79,7 @@ async def debug_exception_handler(request: Request, exc: Exception):
 # Include routers
 app.include_router(conditions_router)
 app.include_router(vision_router)
+app.include_router(proposal_router)
 
 
 def get_db():
