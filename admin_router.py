@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 import json
 import datetime
+import traceback
 
 from database import get_db
 from models import CompanySettings
@@ -107,39 +108,55 @@ def get_or_create_settings(db: Session) -> CompanySettings:
 
 # ── Endpoints ────────────────────────────────────────────────
 
+@admin_router.get("/health")
+def admin_health():
+    """Quick check that admin router is loaded."""
+    return {"status": "ok", "router": "admin", "version": "1.1"}
+
+
 @admin_router.get("/company")
 def get_company_settings(db: Session = Depends(get_db)):
     """Get current company settings."""
-    settings = get_or_create_settings(db)
-    return _settings_to_response(settings)
+    try:
+        settings = get_or_create_settings(db)
+        return _settings_to_response(settings)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to load settings: {str(e)}")
 
 
 @admin_router.put("/company")
 def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depends(get_db)):
     """Update company settings."""
-    settings = get_or_create_settings(db)
+    try:
+        print(f"[ADMIN] PUT /company received: {updates}")
+        settings = get_or_create_settings(db)
 
-    # Update simple string fields
-    for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text"]:
-        value = getattr(updates, field, None)
-        if value is not None:
-            setattr(settings, field, value)
+        # Update simple string fields
+        for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text"]:
+            value = getattr(updates, field, None)
+            if value is not None:
+                setattr(settings, field, value)
 
-    # Update JSON list fields
-    if updates.services is not None:
-        settings.services_json = json.dumps(updates.services)
-    if updates.certifications is not None:
-        settings.certifications_json = json.dumps(updates.certifications)
-    if updates.why_choose_us is not None:
-        settings.why_choose_us_json = json.dumps(updates.why_choose_us)
-    if updates.default_terms is not None:
-        settings.default_terms_json = json.dumps(updates.default_terms)
+        # Update JSON list fields
+        if updates.services is not None:
+            settings.services_json = json.dumps(updates.services)
+        if updates.certifications is not None:
+            settings.certifications_json = json.dumps(updates.certifications)
+        if updates.why_choose_us is not None:
+            settings.why_choose_us_json = json.dumps(updates.why_choose_us)
+        if updates.default_terms is not None:
+            settings.default_terms_json = json.dumps(updates.default_terms)
 
-    settings.updated_at = datetime.datetime.utcnow()
-    db.commit()
-    db.refresh(settings)
+        settings.updated_at = datetime.datetime.utcnow()
+        db.commit()
+        db.refresh(settings)
+        print(f"[ADMIN] Settings saved successfully, id={settings.id}")
 
-    return _settings_to_response(settings)
+        return _settings_to_response(settings)
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to save settings: {str(e)}")
 
 
 @admin_router.post("/company/logo")
