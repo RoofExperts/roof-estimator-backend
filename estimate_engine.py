@@ -62,6 +62,45 @@ def detect_system_type(project: "Project") -> str:
 
 
 # ============================================================================
+# HELPER: SMART QUANTITY CALCULATOR
+# ============================================================================
+
+def _calculate_quantity(condition: "RoofCondition", template: "MaterialTemplate") -> float:
+    """
+    Calculate base quantity for a condition + template pair.
+
+    Special formulas:
+    - wall_flashing membrane: length × (flashing_height_inches + 18) / 12  → converts to linear feet of material
+    - wall_flashing fasteners: length / fastener_spacing_inches  → screws per LF
+    - all others: measurement_value × coverage_rate (standard)
+
+    calc_type field on MaterialTemplate (if present) drives special logic:
+      'wall_membrane'  → uses flashing height formula
+      'fastener'       → uses fastener spacing formula
+      None / anything else → standard
+    """
+    measurement = condition.measurement_value
+    coverage = template.coverage_rate
+    calc_type = getattr(template, "calc_type", None)
+
+    if calc_type == "wall_membrane":
+        # TPO/EPDM/PVC sheet to cover wall: length × (height_in + 18") / 12
+        height_in = getattr(condition, "flashing_height", None) or 60.0
+        width_ft = (height_in + 18.0) / 12.0
+        return measurement * width_ft * coverage
+
+    elif calc_type == "fastener":
+        # Screws/plates per linear foot based on spacing
+        spacing_in = getattr(condition, "fastener_spacing", None) or 12
+        fasteners_per_lf = 12.0 / spacing_in
+        return measurement * fasteners_per_lf * coverage
+
+    else:
+        # Standard: measurement × coverage_rate
+        return measurement * coverage
+
+
+# ============================================================================
 # MAIN CALCULATION FUNCTION
 # ============================================================================
 
@@ -127,8 +166,8 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
 
             # Generate line items from templates
             for template in templates:
-                # Calculate quantity with waste
-                base_quantity = condition.measurement_value * template.coverage_rate
+                # Calculate quantity with waste (uses smart formula for wall flashing etc.)
+                base_quantity = _calculate_quantity(condition, template)
                 quantity = base_quantity * (1 + template.waste_factor)
 
                 # Look up cost from database

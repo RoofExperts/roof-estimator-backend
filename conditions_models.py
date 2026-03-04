@@ -48,6 +48,18 @@ class RoofCondition(Base):
         nullable=True,
         comment="ASCE 7-16 wind zone: 1, 2, 3, or 4"
     )
+    flashing_height = Column(
+        Float,
+        nullable=True,
+        default=60.0,
+        comment="Flashing height in inches (default 60\"). Used for wall flashing material calculations."
+    )
+    fastener_spacing = Column(
+        Integer,
+        nullable=True,
+        default=12,
+        comment="Fastener spacing in inches (e.g. 12 or 6). User selectable per condition."
+    )
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     # Relationships
@@ -97,6 +109,10 @@ class MaterialTemplate(Base):
         comment="Units needed per unit of measurement (e.g., 1.0 fastener per 1 sqft)"
     )
     waste_factor = Column(Float, default=0.10, comment="Waste percentage (default 10%)")
+    calc_type = Column(
+        String, nullable=True,
+        comment="Special calculation type: 'wall_membrane' (uses flashing height), 'fastener' (uses spacing), NULL=standard"
+    )
     is_active = Column(Boolean, default=True, index=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,
                     comment="NULL + is_global=True = shared seed template")

@@ -21,12 +21,12 @@ def seed_material_templates(db: Session):
 
     templates = []
 
-    def t(system, ctype, name, cat, unit, rate, waste=0.10):
+    def t(system, ctype, name, cat, unit, rate, waste=0.10, calc_type=None):
         templates.append(MaterialTemplate(
             system_type=system, condition_type=ctype, material_name=name,
             material_category=cat, unit=unit,
-            coverage_rate=rate, waste_factor=waste, is_active=True,
-            org_id=None, is_global=True
+            coverage_rate=rate, waste_factor=waste, calc_type=calc_type,
+            is_active=True, org_id=None, is_global=True
         ))
 
     # ======================== COMMON (shared across all systems) ========================
@@ -65,6 +65,57 @@ def seed_material_templates(db: Session):
     t("TPO", "penetration", "TPO Adhesive", "adhesive", "gallon", 0.05, 0.05)
     t("TPO", "edge_detail", "TPO Strip (6in)", "membrane", "lnft", 1.0, 0.10)
     t("TPO", "transition", "TPO 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
+
+    # ======================== TPO: ROOF DRAINS ========================
+    # Each drain gets 1 tube of waterblock + 2 SF of TPO membrane
+    t("TPO", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+    t("TPO", "roof_drain", "TPO 60mil Membrane", "membrane", "sqft", 2.0, 0.10)
+
+    # ======================== TPO: SCUPPERS ========================
+    # Each scupper gets 1 metal scupper box + 1 tube of waterblock
+    t("TPO", "scupper", "Metal Scupper Box", "flashing", "each", 1.0, 0.0)
+    t("TPO", "scupper", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+
+    # ======================== TPO: WALL FLASHING (edge_detail with height) ========================
+    # Screws + plates: qty = LF / fastener_spacing_in (calc_type=fastener)
+    # TPO membrane: qty = LF × (height_in + 18") / 12 (calc_type=wall_membrane)
+    # Bonding adhesive: 1 gallon per 50 LF
+    # Termination bar or plastic caps: 1 LF per LF of wall
+    t("TPO", "wall_flashing", "Screw and Plate (1.5in)", "fastener", "each", 1.0, 0.05, calc_type="fastener")
+    t("TPO", "wall_flashing", "TPO 60mil Membrane", "membrane", "sqft", 1.0, 0.10, calc_type="wall_membrane")
+    t("TPO", "wall_flashing", "TPO Bonding Adhesive", "adhesive", "gallon", 0.02, 0.05)
+    t("TPO", "wall_flashing", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
+    t("TPO", "wall_flashing", "Plastic Caps", "accessory", "each", 2.0, 0.05)
+
+    # ======================== EPDM: ROOF DRAINS ========================
+    t("EPDM", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+    t("EPDM", "roof_drain", "EPDM 45mil Membrane", "membrane", "sqft", 2.0, 0.10)
+
+    # ======================== EPDM: SCUPPERS ========================
+    t("EPDM", "scupper", "Metal Scupper Box", "flashing", "each", 1.0, 0.0)
+    t("EPDM", "scupper", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+
+    # ======================== EPDM: WALL FLASHING ========================
+    t("EPDM", "wall_flashing", "Screw and Plate (1.5in)", "fastener", "each", 1.0, 0.05, calc_type="fastener")
+    t("EPDM", "wall_flashing", "EPDM 45mil Membrane", "membrane", "sqft", 1.0, 0.10, calc_type="wall_membrane")
+    t("EPDM", "wall_flashing", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.02, 0.05)
+    t("EPDM", "wall_flashing", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
+    t("EPDM", "wall_flashing", "Plastic Caps", "accessory", "each", 2.0, 0.05)
+
+    # ======================== PVC: ROOF DRAINS ========================
+    t("PVC", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+    t("PVC", "roof_drain", "PVC 60mil Membrane", "membrane", "sqft", 2.0, 0.10)
+
+    # ======================== PVC: SCUPPERS ========================
+    t("PVC", "scupper", "Metal Scupper Box", "flashing", "each", 1.0, 0.0)
+    t("PVC", "scupper", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
+
+    # ======================== PVC: WALL FLASHING ========================
+    t("PVC", "wall_flashing", "Screw and Plate (1.5in)", "fastener", "each", 1.0, 0.05, calc_type="fastener")
+    t("PVC", "wall_flashing", "PVC 60mil Membrane", "membrane", "sqft", 1.0, 0.10, calc_type="wall_membrane")
+    t("PVC", "wall_flashing", "PVC Solvent Weld", "adhesive", "gallon", 0.02, 0.05)
+    t("PVC", "wall_flashing", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
+    t("PVC", "wall_flashing", "Plastic Caps", "accessory", "each", 2.0, 0.05)
 
     # ======================== EPDM SYSTEM ========================
     t("EPDM", "field", "EPDM 45mil Membrane", "membrane", "sqft", 1.0, 0.10)
@@ -201,6 +252,13 @@ def seed_cost_database(db: Session):
     c("Perimeter Bar (Aluminum)", "Metal Era", "accessory", "lnft", 1.75, 1.50)
     c("Termination Bar", "Metal Era", "accessory", "lnft", 1.50, 1.25)
 
+    # ── Drain / Scupper / Wall Flashing specific items ──
+    c("Waterblock Sealant", "Tremco", "sealant", "each", 12.50, 3.00)
+    c("Metal Scupper Box", "Metal Era", "flashing", "each", 45.00, 25.00)
+    c("Screw and Plate (1.5in)", "OMG", "fastener", "each", 0.22, 0.08)
+    c("Plastic Caps", "OMG", "accessory", "each", 0.08, 0.05)
+    c("TPO Bonding Adhesive", "Carlisle", "adhesive", "gallon", 20.00, 5.00)
+
     # ======================== MODIFIED BITUMEN PRICING ========================
     c("SBS Mod Bit Cap Sheet", "GAF", "membrane", "sqft", 0.95, 0.85)
     c("SBS Mod Bit Base Sheet", "GAF", "membrane", "sqft", 0.55, 0.45)
@@ -258,6 +316,7 @@ def clone_seed_for_org(org_id: int, db: Session):
             unit=t.unit,
             coverage_rate=t.coverage_rate,
             waste_factor=t.waste_factor,
+            calc_type=t.calc_type,
             is_active=True,
             org_id=org_id,
             is_global=False,

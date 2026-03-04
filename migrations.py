@@ -66,6 +66,16 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "material_templates", "system_type", "VARCHAR", "common"):
         changes += 1
 
+    # ── roof_conditions: flashing_height + fastener_spacing ──
+    if add_column_if_missing(engine, "roof_conditions", "flashing_height", "FLOAT", 60.0):
+        changes += 1
+    if add_column_if_missing(engine, "roof_conditions", "fastener_spacing", "INTEGER", 12):
+        changes += 1
+
+    # ── material_templates: calc_type ──
+    if add_column_if_missing(engine, "material_templates", "calc_type", "VARCHAR"):
+        changes += 1
+
     # ====================================================================
     # MULTI-TENANT MIGRATIONS
     # ====================================================================
