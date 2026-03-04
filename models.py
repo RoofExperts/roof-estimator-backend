@@ -67,6 +67,8 @@ class User(Base):
     password_hash = Column(String, nullable=False)
     role = Column(String, default="estimator")  # Legacy — role is now per-org in OrganizationMember
     current_org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True)
+    is_superadmin = Column(Boolean, default=False, index=True,
+                           comment="Platform-level superadmin — can manage all orgs")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

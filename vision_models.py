@@ -64,3 +64,20 @@ class VisionExtraction(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     plan_file = relationship("RoofPlanFile", back_populates="extractions")
+
+
+class PlanMarkup(Base):
+    """User annotations and measurements drawn on the plan viewer."""
+    __tablename__ = "plan_markups"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_file_id = Column(Integer, ForeignKey("roof_plan_files.id"), nullable=False, index=True)
+    page_number = Column(Integer, nullable=False)
+    markup_type = Column(String(20), nullable=False)  # measurement, line, rect, circle, arrow, freehand, text
+    data_json = Column(Text, nullable=False)  # JSON blob with coordinates, color, etc.
+    distance_ft = Column(Float, nullable=True)  # only for measurement type
+    label = Column(String(200), nullable=True)
+    created_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    plan_file = relationship("RoofPlanFile")

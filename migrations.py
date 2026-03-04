@@ -73,8 +73,10 @@ def run_migrations(engine: Engine):
     # ── New tables are created by Base.metadata.create_all in main.py ──
     # organizations, organization_members, user_invites
 
-    # ── users: current_org_id ──
+    # ── users: current_org_id + is_superadmin ──
     if add_column_if_missing(engine, "users", "current_org_id", "INTEGER"):
+        changes += 1
+    if add_column_if_missing(engine, "users", "is_superadmin", "BOOLEAN", False):
         changes += 1
 
     # ── projects: org_id ──

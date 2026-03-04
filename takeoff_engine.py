@@ -209,7 +209,166 @@ PVC_PRODUCTS = {
     },
 }
 
-SYSTEM_PRODUCTS = {"TPO": TPO_PRODUCTS, "EPDM": EPDM_PRODUCTS, "PVC": PVC_PRODUCTS}
+MODBIT_PRODUCTS = {
+    "membrane_rolls": {
+        "name": "SBS Mod Bit Cap Sheet (1 SQ roll)",
+        "coverage_sqft": 100,
+        "unit": "Roll",
+        "unit_cost": 95.00,
+    },
+    "base_sheet": {
+        "name": "SBS Mod Bit Base Sheet (3 SQ roll)",
+        "coverage_sqft": 300,
+        "unit": "Roll",
+        "unit_cost": 165.00,
+    },
+    "hot_asphalt": {
+        "name": "Hot Asphalt Type III (100 lb keg)",
+        "coverage_sqft": 1250,
+        "unit": "Keg",
+        "unit_cost": 52.00,
+    },
+    "primer": {
+        "name": "Mod Bit Asphalt Primer (5 gal)",
+        "coverage_sqft": 2500,
+        "unit": "Pail",
+        "unit_cost": 48.00,
+    },
+    "mastic": {
+        "name": "Mod Bit Mastic (5 gal)",
+        "coverage_lnft": 200,
+        "unit": "Pail",
+        "unit_cost": 55.00,
+    },
+    "unsupported_flashing": {
+        "name": 'Mod Bit 18" Flashing Roll',
+        "coverage_lnft": 33,
+        "unit": "Roll",
+        "unit_cost": 65.00,
+    },
+    "water_block": {
+        "name": "Polyurethane Caulk",
+        "coverage_each": 8,
+        "unit": "Tube",
+        "unit_cost": 9.50,
+    },
+    "inside_corners": {
+        "name": "Mod Bit Inside Corners",
+        "unit": "Each",
+        "unit_cost": 6.00,
+    },
+}
+
+BUR_PRODUCTS = {
+    "membrane_rolls": {
+        "name": "Fiberglass Felt Type IV (4 SQ roll)",
+        "coverage_sqft": 400,
+        "unit": "Roll",
+        "unit_cost": 72.00,
+    },
+    "hot_asphalt": {
+        "name": "Hot Asphalt Type III (100 lb keg)",
+        "coverage_sqft": 400,
+        "unit": "Keg",
+        "unit_cost": 52.00,
+    },
+    "flood_coat_gravel": {
+        "name": "Roofing Gravel #4 Aggregate (ton)",
+        "coverage_sqft": 250,
+        "unit": "Ton",
+        "unit_cost": 85.00,
+    },
+    "primer": {
+        "name": "BUR Asphalt Primer (5 gal)",
+        "coverage_sqft": 2500,
+        "unit": "Pail",
+        "unit_cost": 45.00,
+    },
+    "mastic": {
+        "name": "BUR Plastic Cement (5 gal)",
+        "coverage_lnft": 150,
+        "unit": "Pail",
+        "unit_cost": 48.00,
+    },
+    "unsupported_flashing": {
+        "name": 'BUR 18" Felt Stripping Ply',
+        "coverage_lnft": 50,
+        "unit": "Roll",
+        "unit_cost": 28.00,
+    },
+    "water_block": {
+        "name": "BUR Plastic Cement Tube",
+        "coverage_each": 8,
+        "unit": "Tube",
+        "unit_cost": 8.50,
+    },
+    "inside_corners": {
+        "name": "BUR Cant Strip (4' piece)",
+        "unit": "Each",
+        "unit_cost": 4.50,
+    },
+}
+
+STANDINGSEAM_PRODUCTS = {
+    "membrane_rolls": {
+        "name": "24ga Standing Seam Panel Galvalume (per SQ)",
+        "coverage_sqft": 100,
+        "unit": "SQ",
+        "unit_cost": 385.00,
+    },
+    "clips_fixed": {
+        "name": "Standing Seam Fixed Clip (box of 100)",
+        "coverage_sqft": 200,
+        "unit": "Box",
+        "unit_cost": 65.00,
+    },
+    "clips_floating": {
+        "name": "Standing Seam Floating Clip (box of 100)",
+        "coverage_sqft": 200,
+        "unit": "Box",
+        "unit_cost": 85.00,
+    },
+    "panel_screws": {
+        "name": "#12x1.5 Panel Screws (box of 250)",
+        "coverage_sqft": 125,
+        "unit": "Box",
+        "unit_cost": 32.00,
+    },
+    "underlayment": {
+        "name": "Synthetic Underlayment (10 SQ roll)",
+        "coverage_sqft": 1000,
+        "unit": "Roll",
+        "unit_cost": 95.00,
+    },
+    "unsupported_flashing": {
+        "name": "24ga Transition Flashing (10' piece)",
+        "coverage_lnft": 10,
+        "unit": "Pcs",
+        "unit_cost": 55.00,
+    },
+    "ridge_cap": {
+        "name": "24ga Ridge Cap (10' piece)",
+        "coverage_lnft": 10,
+        "unit": "Pcs",
+        "unit_cost": 60.00,
+    },
+    "sealant": {
+        "name": "Butyl Metal Sealant (tube)",
+        "coverage_lnft": 50,
+        "unit": "Tube",
+        "unit_cost": 8.50,
+    },
+    "inside_corners": {
+        "name": "Valley Flashing (10' piece)",
+        "unit": "Each",
+        "unit_cost": 48.00,
+    },
+}
+
+SYSTEM_PRODUCTS = {
+    "TPO": TPO_PRODUCTS, "EPDM": EPDM_PRODUCTS, "PVC": PVC_PRODUCTS,
+    "ModBit": MODBIT_PRODUCTS, "BUR": BUR_PRODUCTS, "StandingSeam": STANDINGSEAM_PRODUCTS,
+}
 
 # Common products (insulation, fasteners) shared across systems
 INSULATION_PRODUCTS = {

@@ -11,7 +11,7 @@ from typing import Optional, List
 
 from auth import get_current_user
 from database import SessionLocal
-from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
+from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction, PlanMarkup
 from conditions_models import RoofCondition, EstimateLineItem
 from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
@@ -31,6 +31,18 @@ class ExtractionUpdate(BaseModel):
     measurement_value: Optional[float] = None
     measurement_unit: Optional[str] = None
     notes: Optional[str] = None
+
+
+class MarkupItem(BaseModel):
+    page_number: int
+    markup_type: str
+    data_json: str
+    distance_ft: Optional[float] = None
+    label: Optional[str] = None
+
+
+class SaveMarkupsRequest(BaseModel):
+    markups: List[MarkupItem]
 
 
 @router.post("/projects/{project_id}/upload-plan")
@@ -304,3 +316,79 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             "page_count": plan_file.page_count, "detected_scale": plan_file.detected_scale,
             "extractions_count": extraction_count, "conditions_created": condition_count,
             "error_message": plan_file.error_message}
+
+
+# ============================================================================
+# PLAN MARKUPS / MEASUREMENTS
+# ============================================================================
+
+@router.post("/plan-files/{plan_file_id}/markups")
+def save_markups(
+    plan_file_id: int,
+    data: SaveMarkupsRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Save user-drawn markups and measurements for a plan file."""
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    created = []
+    for item in data.markups:
+        markup = PlanMarkup(
+            plan_file_id=plan_file_id,
+            page_number=item.page_number,
+            markup_type=item.markup_type,
+            data_json=item.data_json,
+            distance_ft=item.distance_ft,
+            label=item.label,
+            created_by=current_user["user_id"],
+        )
+        db.add(markup)
+        db.flush()
+        created.append(markup.id)
+
+    db.commit()
+    return {"message": f"Saved {len(created)} markups", "markup_ids": created}
+
+
+@router.get("/plan-files/{plan_file_id}/markups")
+def get_markups(
+    plan_file_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Get all markups for a plan file."""
+    markups = db.query(PlanMarkup).filter(
+        PlanMarkup.plan_file_id == plan_file_id
+    ).order_by(PlanMarkup.page_number, PlanMarkup.created_at).all()
+
+    return [
+        {
+            "id": m.id,
+            "page_number": m.page_number,
+            "markup_type": m.markup_type,
+            "data_json": m.data_json,
+            "distance_ft": m.distance_ft,
+            "label": m.label,
+            "created_by": m.created_by,
+            "created_at": str(m.created_at),
+        }
+        for m in markups
+    ]
+
+
+@router.delete("/markups/{markup_id}")
+def delete_markup(
+    markup_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a specific markup."""
+    markup = db.query(PlanMarkup).filter(PlanMarkup.id == markup_id).first()
+    if not markup:
+        raise HTTPException(status_code=404, detail="Markup not found")
+    db.delete(markup)
+    db.commit()
+    return {"message": "Markup deleted", "id": markup_id}

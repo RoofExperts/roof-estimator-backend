@@ -23,6 +23,7 @@ from vision_router import router as vision_router
 from proposal_router import proposal_router
 from admin_router import admin_router
 from customer_router import customer_router
+from platform_admin_router import router as platform_admin_router
 
 import requests
 import tempfile
@@ -89,6 +90,7 @@ app.include_router(vision_router)
 app.include_router(proposal_router)
 app.include_router(admin_router)
 app.include_router(customer_router)
+app.include_router(platform_admin_router)
 
 
 def get_db():
@@ -261,7 +263,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "sub": user.email,
         "user_id": user.id,
         "org_id": org_id,
-        "role": role
+        "role": role,
+        "is_superadmin": bool(user.is_superadmin),
     })
 
     return {
@@ -270,7 +273,8 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "user_id": user.id,
         "org_id": org_id,
         "org_name": org.name if org else "",
-        "role": role
+        "role": role,
+        "is_superadmin": bool(user.is_superadmin),
     }
 
 
