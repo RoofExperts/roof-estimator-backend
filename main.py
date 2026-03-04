@@ -174,6 +174,17 @@ def root():
     return {"message": "Roof Estimator API v3.0.0 (Multi-Tenant)", "status": "running"}
 
 
+@app.post("/promote-superadmin")
+def promote_superadmin(db: Session = Depends(get_db)):
+    """One-time endpoint to promote Anthony to superadmin. Remove after use."""
+    user = db.query(User).filter(User.email == "Anthony@roofexperts.com").first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_superadmin = True
+    db.commit()
+    return {"message": f"{user.email} is now superadmin", "user_id": user.id}
+
+
 @app.post("/register")
 def register(user_data: UserRegister, db: Session = Depends(get_db)):
     """Register a new user and create their organization."""
