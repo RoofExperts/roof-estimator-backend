@@ -22,6 +22,7 @@ from seed_data import seed_database
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from vision_router import router as vision_router
 from proposal_router import proposal_router
+from admin_router import admin_router
 
 import requests
 import tempfile
@@ -39,6 +40,9 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_database(db)
+        # Seed default company settings if none exist
+        from admin_router import get_or_create_settings
+        get_or_create_settings(db)
     finally:
         db.close()
     yield
@@ -80,6 +84,7 @@ async def debug_exception_handler(request: Request, exc: Exception):
 app.include_router(conditions_router)
 app.include_router(vision_router)
 app.include_router(proposal_router)
+app.include_router(admin_router)
 
 
 def get_db():

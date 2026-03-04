@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, Text
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text, JSON
 from database import Base
 import datetime
 
@@ -39,3 +39,31 @@ class Project(Base):
     analysis_result = Column(Text, nullable=True)
 
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# =============================
+# COMPANY SETTINGS MODEL
+# =============================
+class CompanySettings(Base):
+    __tablename__ = "company_settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, default="ROOF EXPERTS")
+    tagline = Column(String, default="Commercial Roofing Specialists")
+    phone = Column(String, default="")
+    email = Column(String, default="")
+    website = Column(String, default="")
+    address = Column(String, default="")
+    license_info = Column(String, default="")
+    logo_url = Column(String, nullable=True)
+
+    # Page 5 / About content
+    about_text = Column(Text, nullable=True)
+    services_json = Column(Text, nullable=True)          # JSON string list
+    certifications_json = Column(Text, nullable=True)     # JSON string list
+    why_choose_us_json = Column(Text, nullable=True)      # JSON string list
+
+    # Default terms & conditions
+    default_terms_json = Column(Text, nullable=True)      # JSON string list
+
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

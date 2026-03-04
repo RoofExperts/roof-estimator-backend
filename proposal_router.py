@@ -12,9 +12,10 @@ import io
 import traceback
 
 from database import get_db
-from models import Project
+from models import Project, CompanySettings
 from conditions_models import RoofCondition, EstimateLineItem
 from proposal_generator import generate_proposal_pdf
+from admin_router import get_or_create_settings, _parse_json_list
 
 
 proposal_router = APIRouter(prefix="/api/v1", tags=["proposals"])
@@ -100,17 +101,31 @@ class ProposalRequest(BaseModel):
     company_info: Optional[Dict[str, Any]] = None
 
 
-# ── Default Company Info ──────────────────────────────────────
+# ── Company Info from DB ──────────────────────────────────────
 
-DEFAULT_COMPANY_INFO = {
-    "name": "ROOF EXPERTS",
-    "tagline": "Commercial Roofing Specialists",
-    "phone": "(713) 555-0100",
-    "email": "Anthony@roofexperts.com",
-    "website": "www.roofexperts.com",
-    "address": "Houston, TX",
-    "license": "Licensed & Insured | Commercial Roofing Contractor",
-}
+def _get_company_info_dict(db: Session) -> dict:
+    """Load company info from DB and return as a dict for the PDF generator."""
+    settings = get_or_create_settings(db)
+    return {
+        "name": settings.name or "ROOF EXPERTS",
+        "tagline": settings.tagline or "Commercial Roofing Specialists",
+        "phone": settings.phone or "",
+        "email": settings.email or "",
+        "website": settings.website or "",
+        "address": settings.address or "",
+        "license": settings.license_info or "",
+        "logo_url": settings.logo_url,
+        "about_text": settings.about_text or "",
+        "services": _parse_json_list(settings.services_json),
+        "certifications": _parse_json_list(settings.certifications_json),
+        "why_choose_us": _parse_json_list(settings.why_choose_us_json),
+    }
+
+
+def _get_default_terms(db: Session) -> list:
+    """Load default terms from DB."""
+    settings = get_or_create_settings(db)
+    return _parse_json_list(settings.default_terms_json)
 
 
 # ── Endpoints ─────────────────────────────────────────────────
@@ -125,7 +140,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Build the data dict for the PDF generator
-    company_info = request.company_info or DEFAULT_COMPANY_INFO
+    company_info = request.company_info or _get_company_info_dict(db)
 
     data = {
         "project_name": request.project_name or project.project_name,
@@ -179,7 +194,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
 
         # Totals
         "grand_total": request.grand_total,
-        "terms": request.terms if request.terms else [],
+        "terms": request.terms if request.terms else _get_default_terms(db),
     }
 
     try:
@@ -255,5 +270,6 @@ async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
         "proposal_date": datetime.date.today().strftime("%B %d, %Y"),
         "conditions": condition_summary,
         "estimate_items": estimate_items,
-        "company_info": DEFAULT_COMPANY_INFO,
+        "company_info": _get_company_info_dict(db),
+        "default_terms": _get_default_terms(db),
     }

@@ -11,6 +11,8 @@ Pages:
 """
 
 import io
+import os
+import tempfile
 import datetime
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.units import inch
@@ -164,6 +166,25 @@ class ProposalTemplate:
     def __init__(self, company_info):
         self.company = company_info
         self.page_count = 0
+        self._logo_path = None
+        # Download logo from S3 if logo_url is provided
+        logo_url = company_info.get("logo_url")
+        if logo_url:
+            try:
+                from s3_service import s3_client, AWS_BUCKET_NAME
+                s3_key = logo_url.split(".amazonaws.com/")[-1]
+                ext = s3_key.rsplit(".", 1)[-1] if "." in s3_key else "png"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{ext}")
+                s3_client.download_fileobj(AWS_BUCKET_NAME, s3_key, tmp)
+                tmp.close()
+                self._logo_path = tmp.name
+            except Exception:
+                self._logo_path = None
+
+    def cleanup(self):
+        """Remove temp logo file if it was downloaded."""
+        if self._logo_path and os.path.exists(self._logo_path):
+            os.unlink(self._logo_path)
 
     def header_footer(self, canvas_obj, doc):
         self.page_count += 1
@@ -174,14 +195,38 @@ class ProposalTemplate:
         canvas_obj.setFillColor(BRAND_BLUE)
         canvas_obj.rect(0, h - 60, w, 60, fill=1, stroke=0)
 
-        # Company name
+        # Logo or Company name
+        text_left_x = 0.75 * inch
+        if self._logo_path:
+            try:
+                from reportlab.lib.utils import ImageReader
+                img = ImageReader(self._logo_path)
+                iw, ih = img.getSize()
+                # Scale logo to fit within 44px height in header
+                logo_h = 44
+                logo_w = (iw / ih) * logo_h
+                if logo_w > 180:  # cap width
+                    logo_w = 180
+                    logo_h = (ih / iw) * logo_w
+                canvas_obj.drawImage(
+                    self._logo_path,
+                    0.75 * inch, h - 54,
+                    width=logo_w, height=logo_h,
+                    preserveAspectRatio=True,
+                    mask='auto'
+                )
+                text_left_x = 0.75 * inch + logo_w + 10
+            except Exception:
+                pass  # Fall back to text-only header
+
+        # Company name (beside logo or standalone)
         canvas_obj.setFillColor(white)
         canvas_obj.setFont("Helvetica-Bold", 18)
-        canvas_obj.drawString(0.75 * inch, h - 38, self.company.get("name", "ROOF EXPERTS"))
+        canvas_obj.drawString(text_left_x, h - 38, self.company.get("name", "ROOF EXPERTS"))
 
         # Tagline
         canvas_obj.setFont("Helvetica", 9)
-        canvas_obj.drawString(0.75 * inch, h - 52, self.company.get("tagline", "Commercial Roofing Specialists"))
+        canvas_obj.drawString(text_left_x, h - 52, self.company.get("tagline", "Commercial Roofing Specialists"))
 
         # Contact info right side
         canvas_obj.setFont("Helvetica", 8)
@@ -570,12 +615,12 @@ def build_page_5(data, styles):
     """Page 5: About Roof Experts"""
     elements = []
     elements.append(Spacer(1, 14))
-    elements.append(Paragraph("ABOUT ROOF EXPERTS", styles['PageTitle']))
+    elements.append(Paragraph(f"ABOUT {company.get('name', 'ROOF EXPERTS').upper()}", styles['PageTitle']))
     elements.append(HRFlowable(width="100%", thickness=0.5, color=TABLE_BORDER, spaceAfter=8))
 
     company = data.get("company_info", {})
 
-    about_text = company.get("about", (
+    about_text = company.get("about_text") or company.get("about") or (
         "Roof Experts is a full-service commercial roofing company providing quality "
         "roofing solutions to businesses across the Houston metropolitan area and beyond. "
         "With decades of combined experience, our team specializes in new construction, "
@@ -612,7 +657,7 @@ def build_page_5(data, styles):
     elements.append(Spacer(1, 8))
 
     # Why choose us
-    elements.append(Paragraph("WHY CHOOSE ROOF EXPERTS", styles['SectionHeading']))
+    elements.append(Paragraph(f"WHY CHOOSE {company.get('name', 'ROOF EXPERTS').upper()}", styles['SectionHeading']))
     reasons = company.get("why_choose_us", [
         "Competitive pricing with transparent, detailed proposals",
         "Experienced crews dedicated to commercial roofing",
@@ -816,4 +861,8 @@ def generate_proposal_pdf(data: dict) -> bytes:
 
     pdf_bytes = buffer.getvalue()
     buffer.close()
+
+    # Clean up temp logo file
+    template.cleanup()
+
     return pdf_bytes
