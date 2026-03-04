@@ -98,6 +98,10 @@ class MaterialTemplate(Base):
     )
     waste_factor = Column(Float, default=0.10, comment="Waste percentage (default 10%)")
     is_active = Column(Boolean, default=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,
+                    comment="NULL + is_global=True = shared seed template")
+    is_global = Column(Boolean, default=False, index=True,
+                       comment="True = shared across all orgs (seed data)")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -157,3 +161,7 @@ class CostDatabaseItem(Base):
     labor_cost_per_unit = Column(Float, nullable=True, comment="Optional labor cost per unit")
     last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     is_active = Column(Boolean, default=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,
+                    comment="NULL + is_global=True = shared seed pricing")
+    is_global = Column(Boolean, default=False, index=True,
+                       comment="True = shared across all orgs (seed data)")

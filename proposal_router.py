@@ -18,6 +18,7 @@ from models import Project, CompanySettings, Customer, SavedProposal
 from conditions_models import RoofCondition, EstimateLineItem
 from proposal_generator import generate_proposal_pdf
 from admin_router import get_or_create_settings, _parse_json_list, _parse_json_dict
+from auth import get_current_user
 
 
 proposal_router = APIRouter(prefix="/api/v1", tags=["proposals"])
@@ -116,9 +117,9 @@ class ProposalRequest(BaseModel):
 
 # ── Company Info from DB ──────────────────────────────────────
 
-def _get_company_info_dict(db: Session) -> dict:
+def _get_company_info_dict(db: Session, org_id: Optional[str] = None) -> dict:
     """Load company info from DB and return as a dict for the PDF generator."""
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, org_id)
     return {
         "name": settings.name or "ROOF EXPERTS",
         "tagline": settings.tagline or "Commercial Roofing Specialists",
@@ -250,16 +251,16 @@ PROPOSAL_TYPE_PRESETS = {
 }
 
 
-def _get_default_terms(db: Session) -> list:
+def _get_default_terms(db: Session, org_id: Optional[str] = None) -> list:
     """Load default terms from DB."""
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, org_id)
     return _parse_json_list(settings.default_terms_json)
 
 
 # ── Endpoints ─────────────────────────────────────────────────
 
 @proposal_router.post("/projects/{project_id}/generate-proposal")
-async def generate_proposal(project_id: int, request: ProposalRequest, db: Session = Depends(get_db)):
+async def generate_proposal(project_id: int, request: ProposalRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Generate a bid proposal PDF for a project."""
 
     # Look up project
@@ -268,7 +269,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Build the data dict for the PDF generator
-    company_info = request.company_info or _get_company_info_dict(db)
+    company_info = request.company_info or _get_company_info_dict(db, current_user["org_id"])
 
     data = {
         "project_name": request.project_name or project.project_name,
@@ -332,7 +333,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
         "exclusions": request.exclusions,
         "notes": request.notes,
 
-        "terms": request.terms if request.terms else _get_default_terms(db),
+        "terms": request.terms if request.terms else _get_default_terms(db, current_user["org_id"]),
     }
 
     try:
@@ -355,7 +356,7 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
 
 
 @proposal_router.get("/projects/{project_id}/proposal-defaults")
-async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
+async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """
     Get default/pre-filled proposal data from existing project conditions.
     Frontend can use this to pre-populate the proposal form.
@@ -408,16 +409,16 @@ async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
         "proposal_date": datetime.date.today().strftime("%B %d, %Y"),
         "conditions": condition_summary,
         "estimate_items": estimate_items,
-        "company_info": _get_company_info_dict(db),
-        "default_terms": _get_default_terms(db),
+        "company_info": _get_company_info_dict(db, current_user["org_id"]),
+        "default_terms": _get_default_terms(db, current_user["org_id"]),
     }
 
 
 # ── Proposal Type Presets Endpoints ──────────────────────────
 
-def _get_merged_presets(db: Session) -> dict:
+def _get_merged_presets(db: Session, org_id: Optional[str] = None) -> dict:
     """Merge hardcoded presets with admin-configured overrides from DB."""
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, org_id)
     db_overrides = _parse_json_dict(settings.proposal_type_defaults_json)
 
     result = {}
@@ -446,15 +447,15 @@ def _get_merged_presets(db: Session) -> dict:
 
 
 @proposal_router.get("/proposal-types")
-async def list_proposal_types(db: Session = Depends(get_db)):
+async def list_proposal_types(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get all available proposal types with their presets (merged with admin overrides)."""
-    return _get_merged_presets(db)
+    return _get_merged_presets(db, current_user["org_id"])
 
 
 @proposal_router.get("/proposal-types/{proposal_type}")
-async def get_proposal_type(proposal_type: str, db: Session = Depends(get_db)):
+async def get_proposal_type(proposal_type: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get presets for a specific proposal type (merged with admin overrides)."""
-    merged = _get_merged_presets(db)
+    merged = _get_merged_presets(db, current_user["org_id"])
     preset = merged.get(proposal_type)
     if not preset:
         raise HTTPException(status_code=404, detail=f"Unknown proposal type: {proposal_type}")
@@ -494,7 +495,7 @@ class BatchProposalRequest(BaseModel):
 # ── Save / Load Proposal Endpoints ───────────────────────────
 
 @proposal_router.post("/projects/{project_id}/proposals")
-async def save_proposal(project_id: int, request: SaveProposalRequest, db: Session = Depends(get_db)):
+async def save_proposal(project_id: int, request: SaveProposalRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Save a proposal draft so it can be edited later."""
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -515,6 +516,7 @@ async def save_proposal(project_id: int, request: SaveProposalRequest, db: Sessi
         proposal_name=request.proposal_name or f"Proposal for {project.project_name}",
         proposal_data=json.dumps(request.proposal_data),
         status="draft",
+        org_id=current_user["org_id"],
     )
     db.add(saved)
     db.commit()
@@ -524,9 +526,9 @@ async def save_proposal(project_id: int, request: SaveProposalRequest, db: Sessi
 
 
 @proposal_router.put("/proposals/{proposal_id}")
-async def update_saved_proposal(proposal_id: int, request: SaveProposalRequest, db: Session = Depends(get_db)):
+async def update_saved_proposal(proposal_id: int, request: SaveProposalRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Update an existing saved proposal."""
-    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id, SavedProposal.org_id == current_user["org_id"]).first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
 
@@ -544,10 +546,11 @@ async def update_saved_proposal(proposal_id: int, request: SaveProposalRequest, 
 
 
 @proposal_router.get("/projects/{project_id}/proposals")
-async def list_saved_proposals(project_id: int, db: Session = Depends(get_db)):
+async def list_saved_proposals(project_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """List all saved proposals for a project."""
     proposals = db.query(SavedProposal).filter(
-        SavedProposal.project_id == project_id
+        SavedProposal.project_id == project_id,
+        SavedProposal.org_id == current_user["org_id"]
     ).order_by(SavedProposal.updated_at.desc()).all()
 
     result = []
@@ -574,9 +577,9 @@ async def list_saved_proposals(project_id: int, db: Session = Depends(get_db)):
 
 
 @proposal_router.get("/proposals/{proposal_id}")
-async def get_saved_proposal(proposal_id: int, db: Session = Depends(get_db)):
+async def get_saved_proposal(proposal_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get a saved proposal with its full data."""
-    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id, SavedProposal.org_id == current_user["org_id"]).first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
 
@@ -601,9 +604,9 @@ async def get_saved_proposal(proposal_id: int, db: Session = Depends(get_db)):
 
 
 @proposal_router.delete("/proposals/{proposal_id}")
-async def delete_saved_proposal(proposal_id: int, db: Session = Depends(get_db)):
+async def delete_saved_proposal(proposal_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Delete a saved proposal."""
-    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id, SavedProposal.org_id == current_user["org_id"]).first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
     db.delete(saved)
@@ -612,9 +615,9 @@ async def delete_saved_proposal(proposal_id: int, db: Session = Depends(get_db))
 
 
 @proposal_router.put("/proposals/{proposal_id}/status")
-async def update_proposal_status(proposal_id: int, status: str, db: Session = Depends(get_db)):
+async def update_proposal_status(proposal_id: int, status: str, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Update proposal status (draft, sent, accepted, declined)."""
-    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id, SavedProposal.org_id == current_user["org_id"]).first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
     if status not in ("draft", "sent", "accepted", "declined"):
@@ -628,7 +631,7 @@ async def update_proposal_status(proposal_id: int, status: str, db: Session = De
 
 @proposal_router.post("/projects/{project_id}/generate-batch-proposals")
 async def generate_batch_proposals(
-    project_id: int, request: BatchProposalRequest, db: Session = Depends(get_db)
+    project_id: int, request: BatchProposalRequest, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)
 ):
     """
     Generate the same proposal PDF for multiple customers.
@@ -638,7 +641,7 @@ async def generate_batch_proposals(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    company_info = _get_company_info_dict(db)
+    company_info = _get_company_info_dict(db, current_user["org_id"])
     results = []
 
     for customer_id in request.customer_ids:
@@ -661,7 +664,7 @@ async def generate_batch_proposals(
         data["proposal_number"] = proposal_num
         data["proposal_date"] = data.get("proposal_date") or datetime.date.today().strftime("%B %d, %Y")
         data["company_info"] = data.get("company_info") or company_info
-        data["terms"] = data.get("terms") or _get_default_terms(db)
+        data["terms"] = data.get("terms") or _get_default_terms(db, current_user["org_id"])
 
         # Save proposal to DB
         saved = SavedProposal(
@@ -671,6 +674,7 @@ async def generate_batch_proposals(
             proposal_name=f"Proposal for {customer.company_name}",
             proposal_data=json.dumps(data),
             status="draft",
+            org_id=current_user["org_id"],
         )
         db.add(saved)
         db.commit()
@@ -687,9 +691,9 @@ async def generate_batch_proposals(
 
 
 @proposal_router.get("/proposals/{proposal_id}/generate-pdf")
-async def generate_saved_proposal_pdf(proposal_id: int, db: Session = Depends(get_db)):
+async def generate_saved_proposal_pdf(proposal_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Generate a PDF from a saved proposal."""
-    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id).first()
+    saved = db.query(SavedProposal).filter(SavedProposal.id == proposal_id, SavedProposal.org_id == current_user["org_id"]).first()
     if not saved:
         raise HTTPException(status_code=404, detail="Saved proposal not found")
 
@@ -701,9 +705,9 @@ async def generate_saved_proposal_pdf(proposal_id: int, db: Session = Depends(ge
 
     # Ensure company_info and terms are filled
     if not data.get("company_info"):
-        data["company_info"] = _get_company_info_dict(db)
+        data["company_info"] = _get_company_info_dict(db, current_user["org_id"])
     if not data.get("terms"):
-        data["terms"] = _get_default_terms(db)
+        data["terms"] = _get_default_terms(db, current_user["org_id"])
 
     # Fill customer info if linked
     if saved.customer_id and not data.get("prepared_for", {}).get("company"):

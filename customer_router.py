@@ -10,6 +10,7 @@ import datetime
 
 from database import get_db
 from models import Customer
+from auth import get_current_user
 
 
 customer_router = APIRouter(prefix="/api/v1", tags=["customers"])
@@ -58,10 +59,11 @@ class CustomerResponse(BaseModel):
 def list_customers(
     search: Optional[str] = Query(None),
     is_active: bool = Query(True),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """List all customers, optionally filtered by search term."""
-    query = db.query(Customer).filter(Customer.is_active == is_active)
+    query = db.query(Customer).filter(Customer.is_active == is_active, Customer.org_id == current_user["org_id"])
     if search:
         query = query.filter(
             Customer.company_name.ilike(f"%{search}%") |
@@ -71,16 +73,16 @@ def list_customers(
 
 
 @customer_router.get("/customers/{customer_id}", response_model=CustomerResponse)
-def get_customer(customer_id: int, db: Session = Depends(get_db)):
+def get_customer(customer_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get a specific customer by ID."""
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.org_id == current_user["org_id"]).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     return customer
 
 
 @customer_router.post("/customers", response_model=CustomerResponse)
-def create_customer(data: CustomerCreate, db: Session = Depends(get_db)):
+def create_customer(data: CustomerCreate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Create a new customer."""
     customer = Customer(
         company_name=data.company_name,
@@ -89,6 +91,7 @@ def create_customer(data: CustomerCreate, db: Session = Depends(get_db)):
         contact_phone=data.contact_phone,
         address=data.address,
         notes=data.notes,
+        org_id=current_user["org_id"],
     )
     db.add(customer)
     db.commit()
@@ -97,9 +100,9 @@ def create_customer(data: CustomerCreate, db: Session = Depends(get_db)):
 
 
 @customer_router.put("/customers/{customer_id}", response_model=CustomerResponse)
-def update_customer(customer_id: int, data: CustomerUpdate, db: Session = Depends(get_db)):
+def update_customer(customer_id: int, data: CustomerUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Update an existing customer."""
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.org_id == current_user["org_id"]).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
@@ -113,9 +116,9 @@ def update_customer(customer_id: int, data: CustomerUpdate, db: Session = Depend
 
 
 @customer_router.delete("/customers/{customer_id}")
-def delete_customer(customer_id: int, db: Session = Depends(get_db)):
+def delete_customer(customer_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Soft-delete a customer."""
-    customer = db.query(Customer).filter(Customer.id == customer_id).first()
+    customer = db.query(Customer).filter(Customer.id == customer_id, Customer.org_id == current_user["org_id"]).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
     customer.is_active = False

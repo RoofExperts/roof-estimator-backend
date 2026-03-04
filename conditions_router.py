@@ -11,6 +11,7 @@ This module provides all API endpoints for:
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import List, Optional
 from pydantic import BaseModel
 import datetime
@@ -18,6 +19,7 @@ import csv
 import io
 
 from database import SessionLocal
+from auth import get_current_user
 from conditions_models import (
     RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
 )
@@ -180,7 +182,8 @@ router = APIRouter(prefix="/api/v1", tags=["roofing-estimate"])
 def create_condition(
     project_id: int,
     condition: RoofConditionCreate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """Add a new roof condition to a project."""
     roof_condition = RoofCondition(
@@ -198,7 +201,11 @@ def create_condition(
 
 
 @router.get("/projects/{project_id}/conditions", response_model=List[RoofConditionResponse])
-def list_conditions(project_id: int, db: Session = Depends(get_db)):
+def list_conditions(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """List all conditions for a project."""
     conditions = db.query(RoofCondition).filter(
         RoofCondition.project_id == project_id
@@ -207,7 +214,11 @@ def list_conditions(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/conditions/{condition_id}", response_model=RoofConditionResponse)
-def get_condition(condition_id: int, db: Session = Depends(get_db)):
+def get_condition(
+    condition_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Get a specific roof condition by ID."""
     condition = db.query(RoofCondition).filter(
         RoofCondition.id == condition_id
@@ -221,7 +232,8 @@ def get_condition(condition_id: int, db: Session = Depends(get_db)):
 def update_condition(
     condition_id: int,
     condition: RoofConditionUpdate,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """Update an existing roof condition."""
     db_condition = db.query(RoofCondition).filter(
@@ -247,7 +259,11 @@ def update_condition(
 
 
 @router.delete("/conditions/{condition_id}")
-def delete_condition(condition_id: int, db: Session = Depends(get_db)):
+def delete_condition(
+    condition_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Delete a roof condition. Also deletes associated line items."""
     db_condition = db.query(RoofCondition).filter(
         RoofCondition.id == condition_id
@@ -269,7 +285,11 @@ def delete_condition(condition_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.post("/projects/{project_id}/calculate-estimate")
-def calculate_project_estimate(project_id: int, db: Session = Depends(get_db)):
+def calculate_project_estimate(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Calculate the complete estimate for a project."""
     result = calculate_estimate(project_id, db)
     if result.get("status") == "error":
@@ -278,7 +298,11 @@ def calculate_project_estimate(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/projects/{project_id}/estimate")
-def get_project_estimate(project_id: int, db: Session = Depends(get_db)):
+def get_project_estimate(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Get the full estimate summary for a project."""
     result = get_estimate_summary(project_id, db)
     if result.get("status") == "error":
@@ -291,7 +315,11 @@ def get_project_estimate(project_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.post("/material-templates", response_model=MaterialTemplateResponse)
-def create_material_template(template: MaterialTemplateCreate, db: Session = Depends(get_db)):
+def create_material_template(
+    template: MaterialTemplateCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Create a new material template."""
     db_template = MaterialTemplate(
         system_type=template.system_type,
@@ -301,7 +329,8 @@ def create_material_template(template: MaterialTemplateCreate, db: Session = Dep
         unit=template.unit,
         coverage_rate=template.coverage_rate,
         waste_factor=template.waste_factor,
-        is_active=template.is_active
+        is_active=template.is_active,
+        org_id=current_user["org_id"]
     )
     db.add(db_template)
     db.commit()
@@ -314,14 +343,17 @@ def list_material_templates(
     condition_type: Optional[str] = Query(None),
     system_type: Optional[str] = Query(None),
     is_active: bool = Query(True),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """List material templates with optional filtering by condition_type and system_type."""
-    query = db.query(MaterialTemplate).filter(MaterialTemplate.is_active == is_active)
+    query = db.query(MaterialTemplate).filter(
+        MaterialTemplate.is_active == is_active,
+        or_(MaterialTemplate.org_id == current_user["org_id"], MaterialTemplate.is_global == True)
+    )
     if condition_type:
         query = query.filter(MaterialTemplate.condition_type == condition_type)
     if system_type:
-        from sqlalchemy import or_
         query = query.filter(or_(
             MaterialTemplate.system_type == system_type,
             MaterialTemplate.system_type == "common"
@@ -330,7 +362,11 @@ def list_material_templates(
 
 
 @router.get("/material-templates/{template_id}", response_model=MaterialTemplateResponse)
-def get_material_template(template_id: int, db: Session = Depends(get_db)):
+def get_material_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Get a specific material template by ID."""
     template = db.query(MaterialTemplate).filter(MaterialTemplate.id == template_id).first()
     if not template:
@@ -339,9 +375,17 @@ def get_material_template(template_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/material-templates/{template_id}", response_model=MaterialTemplateResponse)
-def update_material_template(template_id: int, template: MaterialTemplateUpdate, db: Session = Depends(get_db)):
+def update_material_template(
+    template_id: int,
+    template: MaterialTemplateUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Update an existing material template."""
-    db_template = db.query(MaterialTemplate).filter(MaterialTemplate.id == template_id).first()
+    db_template = db.query(MaterialTemplate).filter(
+        MaterialTemplate.id == template_id,
+        MaterialTemplate.org_id == current_user["org_id"]
+    ).first()
     if not db_template:
         raise HTTPException(status_code=404, detail="Template not found")
     if template.coverage_rate is not None:
@@ -356,9 +400,16 @@ def update_material_template(template_id: int, template: MaterialTemplateUpdate,
 
 
 @router.delete("/material-templates/{template_id}")
-def delete_material_template(template_id: int, db: Session = Depends(get_db)):
+def delete_material_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Delete a material template (soft delete)."""
-    db_template = db.query(MaterialTemplate).filter(MaterialTemplate.id == template_id).first()
+    db_template = db.query(MaterialTemplate).filter(
+        MaterialTemplate.id == template_id,
+        MaterialTemplate.org_id == current_user["org_id"]
+    ).first()
     if not db_template:
         raise HTTPException(status_code=404, detail="Template not found")
     db_template.is_active = False
@@ -371,7 +422,11 @@ def delete_material_template(template_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.post("/cost-database", response_model=CostDatabaseItemResponse)
-def create_cost_item(item: CostDatabaseItemCreate, db: Session = Depends(get_db)):
+def create_cost_item(
+    item: CostDatabaseItemCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Add a new item to the cost database."""
     db_item = CostDatabaseItem(
         material_name=item.material_name,
@@ -380,7 +435,8 @@ def create_cost_item(item: CostDatabaseItemCreate, db: Session = Depends(get_db)
         unit=item.unit,
         unit_cost=item.unit_cost,
         labor_cost_per_unit=item.labor_cost_per_unit,
-        is_active=item.is_active
+        is_active=item.is_active,
+        org_id=current_user["org_id"]
     )
     db.add(db_item)
     db.commit()
@@ -392,17 +448,25 @@ def create_cost_item(item: CostDatabaseItemCreate, db: Session = Depends(get_db)
 def list_cost_items(
     material_category: Optional[str] = Query(None),
     is_active: bool = Query(True),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """List cost database items with optional filtering."""
-    query = db.query(CostDatabaseItem).filter(CostDatabaseItem.is_active == is_active)
+    query = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_active == is_active,
+        or_(CostDatabaseItem.org_id == current_user["org_id"], CostDatabaseItem.is_global == True)
+    )
     if material_category:
         query = query.filter(CostDatabaseItem.material_category == material_category)
     return query.order_by(CostDatabaseItem.material_name).all()
 
 
 @router.post("/cost-database/upload-pricing")
-def upload_pricing_file(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_pricing_file(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """
     Upload vendor pricing from CSV or Excel file.
 
@@ -496,7 +560,8 @@ def upload_pricing_file(file: UploadFile = File(...), db: Session = Depends(get_
 
             # Find matching CostDatabaseItem by case-insensitive partial match
             matching_item = db.query(CostDatabaseItem).filter(
-                CostDatabaseItem.material_name.ilike(f'%{material_name}%')
+                CostDatabaseItem.material_name.ilike(f'%{material_name}%'),
+                CostDatabaseItem.org_id == current_user["org_id"]
             ).first()
 
             if matching_item:
@@ -527,7 +592,11 @@ def upload_pricing_file(file: UploadFile = File(...), db: Session = Depends(get_
 
 
 @router.get("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
-def get_cost_item(item_id: int, db: Session = Depends(get_db)):
+def get_cost_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Get a specific cost database item by ID."""
     item = db.query(CostDatabaseItem).filter(CostDatabaseItem.id == item_id).first()
     if not item:
@@ -536,9 +605,17 @@ def get_cost_item(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
-def update_cost_item(item_id: int, item: CostDatabaseItemUpdate, db: Session = Depends(get_db)):
+def update_cost_item(
+    item_id: int,
+    item: CostDatabaseItemUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Update an existing cost database item."""
-    db_item = db.query(CostDatabaseItem).filter(CostDatabaseItem.id == item_id).first()
+    db_item = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.id == item_id,
+        CostDatabaseItem.org_id == current_user["org_id"]
+    ).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Cost item not found")
     if item.unit_cost is not None:
@@ -554,9 +631,16 @@ def update_cost_item(item_id: int, item: CostDatabaseItemUpdate, db: Session = D
 
 
 @router.delete("/cost-database/{item_id}")
-def delete_cost_item(item_id: int, db: Session = Depends(get_db)):
+def delete_cost_item(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Delete a cost database item (soft delete)."""
-    db_item = db.query(CostDatabaseItem).filter(CostDatabaseItem.id == item_id).first()
+    db_item = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.id == item_id,
+        CostDatabaseItem.org_id == current_user["org_id"]
+    ).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Cost item not found")
     db_item.is_active = False
@@ -570,7 +654,10 @@ def delete_cost_item(item_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/reference/condition-types")
-def get_condition_types(db: Session = Depends(get_db)):
+def get_condition_types(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """Get all available condition types that have active material templates."""
     types = get_available_condition_types(db)
     return {"condition_types": types}
@@ -580,7 +667,8 @@ def get_condition_types(db: Session = Depends(get_db)):
 def get_condition_materials(
     condition_type: str,
     system_type: Optional[str] = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """Get all materials available for a specific condition type, optionally filtered by system."""
     materials = get_materials_for_condition(condition_type, db, system_type=system_type)
@@ -592,7 +680,11 @@ def get_condition_materials(
 # ============================================================================
 
 @router.post("/projects/{project_id}/smart-build-conditions")
-def smart_build(project_id: int, db: Session = Depends(get_db)):
+def smart_build(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """
     Intelligently build conditions from spec analysis + plan extractions.
 
@@ -617,7 +709,11 @@ def smart_build(project_id: int, db: Session = Depends(get_db)):
 # ============================================================================
 
 @router.get("/projects/{project_id}/takeoff")
-def get_takeoff(project_id: int, db: Session = Depends(get_db)):
+def get_takeoff(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
     """
     Generate a professional material takeoff from conditions + spec data.
 

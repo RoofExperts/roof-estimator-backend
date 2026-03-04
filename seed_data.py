@@ -2,17 +2,21 @@
 Seed data for the commercial roofing estimating engine.
 Creates default MaterialTemplates and CostDatabaseItems.
 Each template is tagged with a system_type: TPO, EPDM, PVC, or common.
+
+Global seed data (is_global=True, org_id=None) is shared read-only across all orgs.
+When a new org is created, clone_seed_for_org() copies these into org-specific records.
 """
 
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from conditions_models import MaterialTemplate, CostDatabaseItem
 
 
 def seed_material_templates(db: Session):
-    """Seed material templates for TPO, EPDM, and PVC systems with system_type tags."""
-    existing = db.query(MaterialTemplate).first()
+    """Seed global material templates for TPO, EPDM, and PVC systems."""
+    existing = db.query(MaterialTemplate).filter(MaterialTemplate.is_global == True).first()
     if existing:
-        print("Material templates already exist. Skipping seed.")
+        print("Global material templates already exist. Skipping seed.")
         return
 
     templates = []
@@ -21,16 +25,15 @@ def seed_material_templates(db: Session):
         templates.append(MaterialTemplate(
             system_type=system, condition_type=ctype, material_name=name,
             material_category=cat, unit=unit,
-            coverage_rate=rate, waste_factor=waste, is_active=True
+            coverage_rate=rate, waste_factor=waste, is_active=True,
+            org_id=None, is_global=True
         ))
 
     # ======================== COMMON (shared across all systems) ========================
-    # Insulation & coverboard - used by TPO, EPDM, and PVC alike
     t("common", "field", '2.6" Polyiso Insulation', "insulation", "sqft", 1.0, 0.05)
     t("common", "field", '1/2" Tapered Coverboard', "accessory", "sqft", 1.0, 0.05)
     t("common", "field", "Vapor Barrier", "accessory", "sqft", 1.0, 0.05)
 
-    # Universal fasteners
     t("common", "field", "Field Fasteners (Plastic)", "fastener", "each", 1.0, 0.10)
     t("common", "perimeter", "Perimeter Fasteners (Stainless)", "fastener", "each", 2.0, 0.10)
     t("common", "perimeter", "Perimeter Bar (Aluminum)", "accessory", "lnft", 1.0, 0.05)
@@ -38,17 +41,14 @@ def seed_material_templates(db: Session):
     t("common", "corner", "Polyurethane Sealant", "sealant", "gallon", 0.05, 0.10)
     t("common", "corner", "Corner Fasteners (Stainless)", "fastener", "each", 4.0, 0.10)
 
-    # Universal penetration accessories
     t("common", "penetration", "Polyurethane Sealant", "sealant", "gallon", 0.10, 0.05)
     t("common", "penetration", "Pitch Pan", "accessory", "each", 1.0, 0.0)
 
-    # Universal edge detail
     t("common", "edge_detail", "Metal Edge Flashing (24ga)", "flashing", "lnft", 1.0, 0.05)
     t("common", "edge_detail", "Drip Edge (Aluminum)", "flashing", "lnft", 1.0, 0.05)
     t("common", "edge_detail", "Polyurethane Sealant", "sealant", "gallon", 0.02, 0.10)
     t("common", "edge_detail", "Edge Fasteners", "fastener", "each", 3.0, 0.10)
 
-    # Universal transition
     t("common", "transition", "Wall Flashing (Aluminum)", "flashing", "lnft", 1.0, 0.05)
     t("common", "transition", "Polyurethane Sealant", "sealant", "gallon", 0.03, 0.10)
     t("common", "transition", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
@@ -90,14 +90,14 @@ def seed_material_templates(db: Session):
 
     db.add_all(templates)
     db.commit()
-    print(f"Seeded {len(templates)} material templates.")
+    print(f"Seeded {len(templates)} global material templates.")
 
 
 def seed_cost_database(db: Session):
-    """Seed the cost database with realistic commercial roofing pricing."""
-    existing = db.query(CostDatabaseItem).first()
+    """Seed the global cost database with realistic commercial roofing pricing."""
+    existing = db.query(CostDatabaseItem).filter(CostDatabaseItem.is_global == True).first()
     if existing:
-        print("Cost database already populated. Skipping seed.")
+        print("Global cost database already populated. Skipping seed.")
         return
 
     items = []
@@ -106,7 +106,8 @@ def seed_cost_database(db: Session):
         items.append(CostDatabaseItem(
             material_name=name, manufacturer=mfr,
             material_category=cat, unit=unit,
-            unit_cost=cost, labor_cost_per_unit=labor, is_active=True
+            unit_cost=cost, labor_cost_per_unit=labor, is_active=True,
+            org_id=None, is_global=True
         ))
 
     # Membranes
@@ -156,7 +157,60 @@ def seed_cost_database(db: Session):
 
     db.add_all(items)
     db.commit()
-    print(f"Seeded {len(items)} cost database items.")
+    print(f"Seeded {len(items)} global cost database items.")
+
+
+def clone_seed_for_org(org_id: int, db: Session):
+    """
+    Clone all global seed templates and cost items for a new organization.
+    This gives each org their own editable copy of the material database.
+    """
+    # Clone material templates
+    global_templates = db.query(MaterialTemplate).filter(
+        MaterialTemplate.is_global == True
+    ).all()
+
+    cloned_templates = 0
+    for t in global_templates:
+        new_t = MaterialTemplate(
+            system_type=t.system_type,
+            condition_type=t.condition_type,
+            material_name=t.material_name,
+            material_category=t.material_category,
+            unit=t.unit,
+            coverage_rate=t.coverage_rate,
+            waste_factor=t.waste_factor,
+            is_active=True,
+            org_id=org_id,
+            is_global=False,
+        )
+        db.add(new_t)
+        cloned_templates += 1
+
+    # Clone cost database items
+    global_costs = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_global == True
+    ).all()
+
+    cloned_costs = 0
+    for c in global_costs:
+        new_c = CostDatabaseItem(
+            material_name=c.material_name,
+            manufacturer=c.manufacturer,
+            material_category=c.material_category,
+            unit=c.unit,
+            unit_cost=c.unit_cost,
+            labor_cost_per_unit=c.labor_cost_per_unit,
+            is_active=True,
+            org_id=org_id,
+            is_global=False,
+        )
+        db.add(new_c)
+        cloned_costs += 1
+
+    db.flush()
+    print(f"[seed] Cloned {cloned_templates} templates and {cloned_costs} cost items for org {org_id}")
+    return {"templates": cloned_templates, "cost_items": cloned_costs}
 
 
 def seed_database(db: Session):

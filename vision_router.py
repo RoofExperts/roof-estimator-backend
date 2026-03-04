@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
 
+from auth import get_current_user
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
 from conditions_models import RoofCondition, EstimateLineItem
@@ -38,6 +39,7 @@ def upload_plan(
     file: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Upload an architectural roof plan PDF for AI vision analysis."""
     allowed_types = [".pdf"]
@@ -89,6 +91,7 @@ def reanalyze_plan(
     plan_file_id: int,
     background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
 ):
     """Re-run AI analysis on an existing plan file.
 
@@ -163,7 +166,7 @@ def reanalyze_plan(
 
 
 @router.get("/projects/{project_id}/plan-files")
-def list_plan_files(project_id: int, db: Session = Depends(get_db)):
+def list_plan_files(project_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """List all uploaded plan files for a project."""
     return db.query(RoofPlanFile).filter(
         RoofPlanFile.project_id == project_id
@@ -171,7 +174,7 @@ def list_plan_files(project_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/plan-files/{plan_file_id}")
-def get_plan_file(plan_file_id: int, db: Session = Depends(get_db)):
+def get_plan_file(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get plan file details including pages and extractions."""
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
@@ -209,7 +212,7 @@ def get_plan_file(plan_file_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/plan-files/{plan_file_id}/extractions")
-def get_extractions(plan_file_id: int, db: Session = Depends(get_db)):
+def get_extractions(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """List all extracted measurements for a plan file."""
     return db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id
@@ -217,7 +220,7 @@ def get_extractions(plan_file_id: int, db: Session = Depends(get_db)):
 
 
 @router.put("/extractions/{extraction_id}")
-def update_extraction(extraction_id: int, update: ExtractionUpdate, db: Session = Depends(get_db)):
+def update_extraction(extraction_id: int, update: ExtractionUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Edit an extracted measurement. User can override AI-detected values."""
     extraction = db.query(VisionExtraction).filter(VisionExtraction.id == extraction_id).first()
     if not extraction:
@@ -248,7 +251,7 @@ def update_extraction(extraction_id: int, update: ExtractionUpdate, db: Session 
 
 
 @router.delete("/extractions/{extraction_id}")
-def delete_extraction(extraction_id: int, db: Session = Depends(get_db)):
+def delete_extraction(extraction_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Delete an extraction and its linked condition."""
     extraction = db.query(VisionExtraction).filter(VisionExtraction.id == extraction_id).first()
     if not extraction:
@@ -265,7 +268,7 @@ def delete_extraction(extraction_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/plan-files/{plan_file_id}/regenerate-conditions")
-def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db)):
+def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Re-create conditions from current extractions after edits."""
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
@@ -287,7 +290,7 @@ def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/plan-files/{plan_file_id}/status")
-def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db)):
+def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Quick status check for plan analysis progress."""
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:

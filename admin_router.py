@@ -13,6 +13,7 @@ import traceback
 from database import get_db
 from models import CompanySettings
 from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
+from auth import get_current_user
 
 
 admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -116,9 +117,12 @@ def _settings_to_response(settings: CompanySettings) -> dict:
     }
 
 
-def get_or_create_settings(db: Session) -> CompanySettings:
+def get_or_create_settings(db: Session, org_id: Optional[str] = None) -> CompanySettings:
     """Get the single company settings row, creating it if it doesn't exist."""
-    settings = db.query(CompanySettings).first()
+    if org_id:
+        settings = db.query(CompanySettings).filter(CompanySettings.org_id == org_id).first()
+    else:
+        settings = db.query(CompanySettings).first()
     if not settings:
         settings = CompanySettings(
             name="ROOF EXPERTS",
@@ -128,6 +132,7 @@ def get_or_create_settings(db: Session) -> CompanySettings:
             website="www.roofexperts.com",
             address="Houston, TX",
             license_info="Licensed & Insured | Commercial Roofing Contractor",
+            org_id=org_id,
         )
         db.add(settings)
         db.commit()
@@ -138,16 +143,16 @@ def get_or_create_settings(db: Session) -> CompanySettings:
 # ── Endpoints ────────────────────────────────────────────────
 
 @admin_router.get("/health")
-def admin_health():
+def admin_health(current_user: dict = Depends(get_current_user)):
     """Quick check that admin router is loaded."""
     return {"status": "ok", "router": "admin", "version": "1.1"}
 
 
 @admin_router.get("/company")
-def get_company_settings(db: Session = Depends(get_db)):
+def get_company_settings(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Get current company settings."""
     try:
-        settings = get_or_create_settings(db)
+        settings = get_or_create_settings(db, current_user["org_id"])
         return _settings_to_response(settings)
     except Exception as e:
         traceback.print_exc()
@@ -155,11 +160,11 @@ def get_company_settings(db: Session = Depends(get_db)):
 
 
 @admin_router.put("/company")
-def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depends(get_db)):
+def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Update company settings."""
     try:
         print(f"[ADMIN] PUT /company received: {updates}")
-        settings = get_or_create_settings(db)
+        settings = get_or_create_settings(db, current_user["org_id"])
 
         # Update simple string fields
         for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text",
@@ -196,9 +201,9 @@ def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depend
 
 
 @admin_router.post("/company/logo")
-def upload_company_logo(file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_company_logo(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Upload a company logo image to S3."""
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, current_user["org_id"])
 
     # Validate file type
     allowed_types = ["image/png", "image/jpeg", "image/jpg", "image/webp", "image/svg+xml"]
@@ -228,9 +233,9 @@ def upload_company_logo(file: UploadFile = File(...), db: Session = Depends(get_
 
 
 @admin_router.delete("/company/logo")
-def delete_company_logo(db: Session = Depends(get_db)):
+def delete_company_logo(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Remove the company logo."""
-    settings = get_or_create_settings(db)
+    settings = get_or_create_settings(db, current_user["org_id"])
 
     if settings.logo_url:
         # Try to delete from S3
