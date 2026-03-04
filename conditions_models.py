@@ -61,13 +61,23 @@ class RoofCondition(Base):
 class MaterialTemplate(Base):
     """
     Defines which materials are used for each condition type and at what coverage rates.
-    
+
     Coverage rates are multiplied by the condition's measurement value to calculate
     the quantity needed. Waste factor is applied as a percentage (e.g., 0.10 = 10%).
+
+    system_type determines which roofing system this template belongs to:
+    TPO, EPDM, PVC, or 'common' (shared across all systems).
     """
     __tablename__ = "material_templates"
-    
+
     id = Column(Integer, primary_key=True, index=True)
+    system_type = Column(
+        String,
+        nullable=False,
+        default="common",
+        index=True,
+        comment="TPO, EPDM, PVC, or common (shared across all systems)"
+    )
     condition_type = Column(
         String,
         nullable=False,

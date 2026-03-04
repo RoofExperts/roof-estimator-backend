@@ -21,6 +21,7 @@ from conditions_models import (
 )
 from estimate_engine import calculate_estimate, get_estimate_summary
 from estimate_engine import get_available_condition_types, get_materials_for_condition
+from condition_builder import smart_build_conditions
 
 
 # ============================================================================
@@ -75,6 +76,7 @@ class RoofConditionResponse(BaseModel):
 
 class MaterialTemplateCreate(BaseModel):
     """Schema for creating a material template."""
+    system_type: str = "common"
     condition_type: str
     material_name: str
     material_category: str
@@ -94,6 +96,7 @@ class MaterialTemplateUpdate(BaseModel):
 class MaterialTemplateResponse(BaseModel):
     """Schema for material template response."""
     id: int
+    system_type: str
     condition_type: str
     material_name: str
     material_category: str
@@ -288,6 +291,7 @@ def get_project_estimate(project_id: int, db: Session = Depends(get_db)):
 def create_material_template(template: MaterialTemplateCreate, db: Session = Depends(get_db)):
     """Create a new material template."""
     db_template = MaterialTemplate(
+        system_type=template.system_type,
         condition_type=template.condition_type,
         material_name=template.material_name,
         material_category=template.material_category,
@@ -305,13 +309,20 @@ def create_material_template(template: MaterialTemplateCreate, db: Session = Dep
 @router.get("/material-templates", response_model=List[MaterialTemplateResponse])
 def list_material_templates(
     condition_type: Optional[str] = Query(None),
+    system_type: Optional[str] = Query(None),
     is_active: bool = Query(True),
     db: Session = Depends(get_db)
 ):
-    """List material templates with optional filtering."""
+    """List material templates with optional filtering by condition_type and system_type."""
     query = db.query(MaterialTemplate).filter(MaterialTemplate.is_active == is_active)
     if condition_type:
         query = query.filter(MaterialTemplate.condition_type == condition_type)
+    if system_type:
+        from sqlalchemy import or_
+        query = query.filter(or_(
+            MaterialTemplate.system_type == system_type,
+            MaterialTemplate.system_type == "common"
+        ))
     return query.all()
 
 
@@ -438,7 +449,36 @@ def get_condition_types(db: Session = Depends(get_db)):
 
 
 @router.get("/reference/condition-types/{condition_type}/materials")
-def get_condition_materials(condition_type: str, db: Session = Depends(get_db)):
-    """Get all materials available for a specific condition type."""
-    materials = get_materials_for_condition(condition_type, db)
-    return {"condition_type": condition_type, "materials": materials}
+def get_condition_materials(
+    condition_type: str,
+    system_type: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """Get all materials available for a specific condition type, optionally filtered by system."""
+    materials = get_materials_for_condition(condition_type, db, system_type=system_type)
+    return {"condition_type": condition_type, "system_type": system_type, "materials": materials}
+
+
+# ============================================================================
+# SMART BUILD ENDPOINT
+# ============================================================================
+
+@router.post("/projects/{project_id}/smart-build-conditions")
+def smart_build(project_id: int, db: Session = Depends(get_db)):
+    """
+    Intelligently build conditions from spec analysis + plan extractions.
+
+    This endpoint:
+    1. Reads the project's spec analysis to determine system type (TPO/EPDM/PVC)
+    2. Sets project.system_type automatically
+    3. Reads all plan extractions (from AI vision)
+    4. Creates conditions with spec-enriched descriptions
+    5. Auto-estimates perimeter if not found in plans
+    6. Returns the full build result
+
+    Call this AFTER both spec analysis and plan analysis are complete.
+    """
+    result = smart_build_conditions(project_id, db)
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("message"))
+    return result

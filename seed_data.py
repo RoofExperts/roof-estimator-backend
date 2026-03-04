@@ -1,6 +1,7 @@
 """
 Seed data for the commercial roofing estimating engine.
 Creates default MaterialTemplates and CostDatabaseItems.
+Each template is tagged with a system_type: TPO, EPDM, PVC, or common.
 """
 
 from sqlalchemy.orm import Session
@@ -8,7 +9,7 @@ from conditions_models import MaterialTemplate, CostDatabaseItem
 
 
 def seed_material_templates(db: Session):
-    """Seed material templates for TPO, EPDM, and PVC systems."""
+    """Seed material templates for TPO, EPDM, and PVC systems with system_type tags."""
     existing = db.query(MaterialTemplate).first()
     if existing:
         print("Material templates already exist. Skipping seed.")
@@ -16,72 +17,76 @@ def seed_material_templates(db: Session):
 
     templates = []
 
-    # Helper to add a template
-    def t(ctype, name, cat, unit, rate, waste=0.10):
+    def t(system, ctype, name, cat, unit, rate, waste=0.10):
         templates.append(MaterialTemplate(
-            condition_type=ctype, material_name=name,
+            system_type=system, condition_type=ctype, material_name=name,
             material_category=cat, unit=unit,
             coverage_rate=rate, waste_factor=waste, is_active=True
         ))
 
-    # ======================== FIELD ========================
-    t("field", "TPO 60mil Membrane", "membrane", "sqft", 1.0, 0.10)
-    t("field", '2.6" Polyiso Insulation', "insulation", "sqft", 1.0, 0.05)
-    t("field", '1/2" Tapered Coverboard', "accessory", "sqft", 1.0, 0.05)
-    t("field", "Field Fasteners (Plastic)", "fastener", "each", 1.0, 0.10)
-    t("field", "TPO Adhesive", "adhesive", "gallon", 0.15, 0.05)
-    t("field", "Vapor Barrier", "accessory", "sqft", 1.0, 0.05)
+    # ======================== COMMON (shared across all systems) ========================
+    # Insulation & coverboard - used by TPO, EPDM, and PVC alike
+    t("common", "field", '2.6" Polyiso Insulation', "insulation", "sqft", 1.0, 0.05)
+    t("common", "field", '1/2" Tapered Coverboard', "accessory", "sqft", 1.0, 0.05)
+    t("common", "field", "Vapor Barrier", "accessory", "sqft", 1.0, 0.05)
 
-    # ======================== PERIMETER ========================
-    t("perimeter", "TPO 60mil Membrane", "membrane", "lnft", 1.0, 0.10)
-    t("perimeter", "Perimeter Fasteners (Stainless)", "fastener", "each", 2.0, 0.10)
-    t("perimeter", "TPO Adhesive", "adhesive", "gallon", 0.20, 0.05)
-    t("perimeter", "Perimeter Bar (Aluminum)", "accessory", "lnft", 1.0, 0.05)
+    # Universal fasteners
+    t("common", "field", "Field Fasteners (Plastic)", "fastener", "each", 1.0, 0.10)
+    t("common", "perimeter", "Perimeter Fasteners (Stainless)", "fastener", "each", 2.0, 0.10)
+    t("common", "perimeter", "Perimeter Bar (Aluminum)", "accessory", "lnft", 1.0, 0.05)
+    t("common", "corner", "Corner Flashing (Aluminum)", "flashing", "lnft", 4.0, 0.05)
+    t("common", "corner", "Polyurethane Sealant", "sealant", "gallon", 0.05, 0.10)
+    t("common", "corner", "Corner Fasteners (Stainless)", "fastener", "each", 4.0, 0.10)
 
-    # ======================== CORNER ========================
-    t("corner", "TPO 60mil Membrane", "membrane", "sqft", 2.0, 0.15)
-    t("corner", "Corner Flashing (Aluminum)", "flashing", "lnft", 4.0, 0.05)
-    t("corner", "Polyurethane Sealant", "sealant", "gallon", 0.05, 0.10)
-    t("corner", "Corner Fasteners (Stainless)", "fastener", "each", 4.0, 0.10)
+    # Universal penetration accessories
+    t("common", "penetration", "Polyurethane Sealant", "sealant", "gallon", 0.10, 0.05)
+    t("common", "penetration", "Pitch Pan", "accessory", "each", 1.0, 0.0)
 
-    # ======================== PENETRATION ========================
-    t("penetration", "TPO 60mil Membrane", "membrane", "sqft", 6.0, 0.15)
-    t("penetration", "Pipe Boot Flashing", "flashing", "each", 1.0, 0.0)
-    t("penetration", "Polyurethane Sealant", "sealant", "gallon", 0.10, 0.05)
-    t("penetration", "Pitch Pan", "accessory", "each", 1.0, 0.0)
-    t("penetration", "TPO Adhesive", "adhesive", "gallon", 0.05, 0.05)
+    # Universal edge detail
+    t("common", "edge_detail", "Metal Edge Flashing (24ga)", "flashing", "lnft", 1.0, 0.05)
+    t("common", "edge_detail", "Drip Edge (Aluminum)", "flashing", "lnft", 1.0, 0.05)
+    t("common", "edge_detail", "Polyurethane Sealant", "sealant", "gallon", 0.02, 0.10)
+    t("common", "edge_detail", "Edge Fasteners", "fastener", "each", 3.0, 0.10)
 
-    # ======================== EDGE DETAIL ========================
-    t("edge_detail", "Metal Edge Flashing (24ga)", "flashing", "lnft", 1.0, 0.05)
-    t("edge_detail", "Drip Edge (Aluminum)", "flashing", "lnft", 1.0, 0.05)
-    t("edge_detail", "Polyurethane Sealant", "sealant", "gallon", 0.02, 0.10)
-    t("edge_detail", "Edge Fasteners", "fastener", "each", 3.0, 0.10)
-    t("edge_detail", "TPO Strip (6in)", "membrane", "lnft", 1.0, 0.10)
+    # Universal transition
+    t("common", "transition", "Wall Flashing (Aluminum)", "flashing", "lnft", 1.0, 0.05)
+    t("common", "transition", "Polyurethane Sealant", "sealant", "gallon", 0.03, 0.10)
+    t("common", "transition", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
+    t("common", "transition", "Transition Fasteners", "fastener", "each", 2.0, 0.10)
 
-    # ======================== TRANSITION ========================
-    t("transition", "TPO 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
-    t("transition", "Wall Flashing (Aluminum)", "flashing", "lnft", 1.0, 0.05)
-    t("transition", "Polyurethane Sealant", "sealant", "gallon", 0.03, 0.10)
-    t("transition", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
-    t("transition", "Transition Fasteners", "fastener", "each", 2.0, 0.10)
+    # ======================== TPO SYSTEM ========================
+    t("TPO", "field", "TPO 60mil Membrane", "membrane", "sqft", 1.0, 0.10)
+    t("TPO", "field", "TPO Adhesive", "adhesive", "gallon", 0.15, 0.05)
+    t("TPO", "perimeter", "TPO 60mil Membrane", "membrane", "lnft", 1.0, 0.10)
+    t("TPO", "perimeter", "TPO Adhesive", "adhesive", "gallon", 0.20, 0.05)
+    t("TPO", "corner", "TPO 60mil Membrane", "membrane", "sqft", 2.0, 0.15)
+    t("TPO", "penetration", "TPO 60mil Membrane", "membrane", "sqft", 6.0, 0.15)
+    t("TPO", "penetration", "Pipe Boot Flashing", "flashing", "each", 1.0, 0.0)
+    t("TPO", "penetration", "TPO Adhesive", "adhesive", "gallon", 0.05, 0.05)
+    t("TPO", "edge_detail", "TPO Strip (6in)", "membrane", "lnft", 1.0, 0.10)
+    t("TPO", "transition", "TPO 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
 
     # ======================== EPDM SYSTEM ========================
-    t("field", "EPDM 45mil Membrane", "membrane", "sqft", 1.0, 0.10)
-    t("field", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.10, 0.05)
-    t("perimeter", "EPDM 45mil Membrane", "membrane", "lnft", 1.0, 0.10)
-    t("corner", "EPDM 45mil Membrane", "membrane", "sqft", 2.0, 0.15)
-    t("penetration", "EPDM Pipe Boot", "flashing", "each", 1.0, 0.0)
-    t("edge_detail", "EPDM Edge Strip", "membrane", "lnft", 1.0, 0.10)
-    t("transition", "EPDM 45mil Membrane", "membrane", "lnft", 2.0, 0.15)
+    t("EPDM", "field", "EPDM 45mil Membrane", "membrane", "sqft", 1.0, 0.10)
+    t("EPDM", "field", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.10, 0.05)
+    t("EPDM", "perimeter", "EPDM 45mil Membrane", "membrane", "lnft", 1.0, 0.10)
+    t("EPDM", "corner", "EPDM 45mil Membrane", "membrane", "sqft", 2.0, 0.15)
+    t("EPDM", "penetration", "EPDM 45mil Membrane", "membrane", "sqft", 6.0, 0.15)
+    t("EPDM", "penetration", "EPDM Pipe Boot", "flashing", "each", 1.0, 0.0)
+    t("EPDM", "penetration", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.05, 0.05)
+    t("EPDM", "edge_detail", "EPDM Edge Strip", "membrane", "lnft", 1.0, 0.10)
+    t("EPDM", "transition", "EPDM 45mil Membrane", "membrane", "lnft", 2.0, 0.15)
 
     # ======================== PVC SYSTEM ========================
-    t("field", "PVC 60mil Membrane", "membrane", "sqft", 1.0, 0.10)
-    t("field", "PVC Solvent Weld", "adhesive", "gallon", 0.12, 0.05)
-    t("perimeter", "PVC 60mil Membrane", "membrane", "lnft", 1.0, 0.10)
-    t("corner", "PVC 60mil Membrane", "membrane", "sqft", 2.0, 0.15)
-    t("penetration", "PVC Pipe Boot", "flashing", "each", 1.0, 0.0)
-    t("edge_detail", "PVC Edge Strip", "membrane", "lnft", 1.0, 0.10)
-    t("transition", "PVC 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
+    t("PVC", "field", "PVC 60mil Membrane", "membrane", "sqft", 1.0, 0.10)
+    t("PVC", "field", "PVC Solvent Weld", "adhesive", "gallon", 0.12, 0.05)
+    t("PVC", "perimeter", "PVC 60mil Membrane", "membrane", "lnft", 1.0, 0.10)
+    t("PVC", "corner", "PVC 60mil Membrane", "membrane", "sqft", 2.0, 0.15)
+    t("PVC", "penetration", "PVC 60mil Membrane", "membrane", "sqft", 6.0, 0.15)
+    t("PVC", "penetration", "PVC Pipe Boot", "flashing", "each", 1.0, 0.0)
+    t("PVC", "penetration", "PVC Solvent Weld", "adhesive", "gallon", 0.05, 0.05)
+    t("PVC", "edge_detail", "PVC Edge Strip", "membrane", "lnft", 1.0, 0.10)
+    t("PVC", "transition", "PVC 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
 
     db.add_all(templates)
     db.commit()

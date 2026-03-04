@@ -38,6 +38,10 @@ Base.metadata.create_all(bind=engine)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize database with seed data on startup."""
+    # Run migrations first (adds missing columns to existing tables)
+    from migrations import run_migrations
+    run_migrations(engine)
+
     db = SessionLocal()
     try:
         seed_database(db)
