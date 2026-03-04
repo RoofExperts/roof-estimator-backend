@@ -5,7 +5,7 @@ Admin Router - Company settings management endpoints.
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 import json
 import datetime
 import traceback
@@ -20,6 +20,12 @@ admin_router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
 # ── Request/Response Models ──────────────────────────────────
 
+class ProposalTypeDefaults(BaseModel):
+    terms: Optional[List[str]] = None
+    exclusions: Optional[List[str]] = None
+    notes: Optional[List[str]] = None
+
+
 class CompanySettingsUpdate(BaseModel):
     name: Optional[str] = None
     tagline: Optional[str] = None
@@ -33,6 +39,10 @@ class CompanySettingsUpdate(BaseModel):
     certifications: Optional[List[str]] = None
     why_choose_us: Optional[List[str]] = None
     default_terms: Optional[List[str]] = None
+    proposal_type_defaults: Optional[Dict[str, ProposalTypeDefaults]] = None
+    primary_color: Optional[str] = None
+    secondary_color: Optional[str] = None
+    accent_color: Optional[str] = None
 
 
 class CompanySettingsResponse(BaseModel):
@@ -50,6 +60,10 @@ class CompanySettingsResponse(BaseModel):
     certifications: List[str]
     why_choose_us: List[str]
     default_terms: List[str]
+    proposal_type_defaults: Dict
+    primary_color: str
+    secondary_color: str
+    accent_color: str
     updated_at: Optional[str]
 
 
@@ -64,6 +78,17 @@ def _parse_json_list(json_str: Optional[str]) -> list:
         return result if isinstance(result, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
+
+
+def _parse_json_dict(json_str: Optional[str]) -> dict:
+    """Safely parse a JSON string dict, returning {} on failure."""
+    if not json_str:
+        return {}
+    try:
+        result = json.loads(json_str)
+        return result if isinstance(result, dict) else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
 
 
 def _settings_to_response(settings: CompanySettings) -> dict:
@@ -83,6 +108,10 @@ def _settings_to_response(settings: CompanySettings) -> dict:
         "certifications": _parse_json_list(settings.certifications_json),
         "why_choose_us": _parse_json_list(settings.why_choose_us_json),
         "default_terms": _parse_json_list(settings.default_terms_json),
+        "proposal_type_defaults": _parse_json_dict(settings.proposal_type_defaults_json),
+        "primary_color": settings.primary_color or "#1e40af",
+        "secondary_color": settings.secondary_color or "#475569",
+        "accent_color": settings.accent_color or "#059669",
         "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
     }
 
@@ -133,7 +162,8 @@ def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depend
         settings = get_or_create_settings(db)
 
         # Update simple string fields
-        for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text"]:
+        for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text",
+                      "primary_color", "secondary_color", "accent_color"]:
             value = getattr(updates, field, None)
             if value is not None:
                 setattr(settings, field, value)
@@ -147,6 +177,12 @@ def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depend
             settings.why_choose_us_json = json.dumps(updates.why_choose_us)
         if updates.default_terms is not None:
             settings.default_terms_json = json.dumps(updates.default_terms)
+        if updates.proposal_type_defaults is not None:
+            # Convert Pydantic models to dicts
+            ptd = {}
+            for key, val in updates.proposal_type_defaults.items():
+                ptd[key] = val.model_dump(exclude_none=True) if hasattr(val, 'model_dump') else val
+            settings.proposal_type_defaults_json = json.dumps(ptd)
 
         settings.updated_at = datetime.datetime.utcnow()
         db.commit()

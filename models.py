@@ -66,6 +66,14 @@ class CompanySettings(Base):
     # Default terms & conditions
     default_terms_json = Column(Text, nullable=True)      # JSON string list
 
+    # Per-proposal-type defaults (JSON dict of {type: {terms:[], exclusions:[], notes:[]}})
+    proposal_type_defaults_json = Column(Text, nullable=True)
+
+    # Brand colors (hex values)
+    primary_color = Column(String, default="#1e40af")      # Main brand color (headers, buttons)
+    secondary_color = Column(String, default="#475569")     # Secondary color (subheadings, accents)
+    accent_color = Column(String, default="#059669")        # Accent color (highlights, CTAs)
+
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
 
 

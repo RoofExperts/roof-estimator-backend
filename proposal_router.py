@@ -17,7 +17,7 @@ from database import get_db
 from models import Project, CompanySettings, Customer, SavedProposal
 from conditions_models import RoofCondition, EstimateLineItem
 from proposal_generator import generate_proposal_pdf
-from admin_router import get_or_create_settings, _parse_json_list
+from admin_router import get_or_create_settings, _parse_json_list, _parse_json_dict
 
 
 proposal_router = APIRouter(prefix="/api/v1", tags=["proposals"])
@@ -132,6 +132,9 @@ def _get_company_info_dict(db: Session) -> dict:
         "services": _parse_json_list(settings.services_json),
         "certifications": _parse_json_list(settings.certifications_json),
         "why_choose_us": _parse_json_list(settings.why_choose_us_json),
+        "primary_color": settings.primary_color or "#1e40af",
+        "secondary_color": settings.secondary_color or "#475569",
+        "accent_color": settings.accent_color or "#059669",
     }
 
 
@@ -412,12 +415,14 @@ async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
 
 # ── Proposal Type Presets Endpoints ──────────────────────────
 
-@proposal_router.get("/proposal-types")
-async def list_proposal_types():
-    """Get all available proposal types with their presets."""
+def _get_merged_presets(db: Session) -> dict:
+    """Merge hardcoded presets with admin-configured overrides from DB."""
+    settings = get_or_create_settings(db)
+    db_overrides = _parse_json_dict(settings.proposal_type_defaults_json)
+
     result = {}
     for key, preset in PROPOSAL_TYPE_PRESETS.items():
-        result[key] = {
+        merged = {
             "label": preset["label"],
             "description": preset["description"],
             "default_pages": preset["default_pages"],
@@ -427,13 +432,30 @@ async def list_proposal_types():
             "default_exclusions": preset["default_exclusions"],
             "default_notes": preset["default_notes"],
         }
+        # Override with DB values if they exist for this type
+        if key in db_overrides:
+            overrides = db_overrides[key]
+            if overrides.get("terms"):
+                merged["default_terms"] = overrides["terms"]
+            if overrides.get("exclusions"):
+                merged["default_exclusions"] = overrides["exclusions"]
+            if overrides.get("notes"):
+                merged["default_notes"] = overrides["notes"]
+        result[key] = merged
     return result
 
 
+@proposal_router.get("/proposal-types")
+async def list_proposal_types(db: Session = Depends(get_db)):
+    """Get all available proposal types with their presets (merged with admin overrides)."""
+    return _get_merged_presets(db)
+
+
 @proposal_router.get("/proposal-types/{proposal_type}")
-async def get_proposal_type(proposal_type: str):
-    """Get presets for a specific proposal type."""
-    preset = PROPOSAL_TYPE_PRESETS.get(proposal_type)
+async def get_proposal_type(proposal_type: str, db: Session = Depends(get_db)):
+    """Get presets for a specific proposal type (merged with admin overrides)."""
+    merged = _get_merged_presets(db)
+    preset = merged.get(proposal_type)
     if not preset:
         raise HTTPException(status_code=404, detail=f"Unknown proposal type: {proposal_type}")
     return preset

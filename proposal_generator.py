@@ -827,10 +827,21 @@ def generate_proposal_pdf(data: dict) -> bytes:
         - roofing_exclusions (list of str)
         - roofing_notes (list of str)
     """
+    # Apply dynamic brand colors from company settings
+    global BRAND_BLUE, BRAND_BLUE_LIGHT, TABLE_HEADER_BG, BRAND_ACCENT, BRAND_GOLD, BRAND_GRAY
+    company_info = data.get("company_info", {})
+    if company_info.get("primary_color"):
+        BRAND_BLUE = HexColor(company_info["primary_color"])
+        BRAND_BLUE_LIGHT = HexColor(company_info["primary_color"])
+        TABLE_HEADER_BG = HexColor(company_info["primary_color"])
+    if company_info.get("secondary_color"):
+        BRAND_GRAY = HexColor(company_info["secondary_color"])
+    if company_info.get("accent_color"):
+        BRAND_ACCENT = HexColor(company_info["accent_color"])
+        BRAND_GOLD = HexColor(company_info["accent_color"])
+
     buffer = io.BytesIO()
     styles = get_custom_styles()
-
-    company_info = data.get("company_info", {})
     template = ProposalTemplate(company_info)
 
     doc = SimpleDocTemplate(
