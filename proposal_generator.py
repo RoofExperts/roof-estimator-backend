@@ -722,8 +722,29 @@ def build_grand_total_section(data, styles):
     return elements
 
 
+def build_exclusions_notes_section(data, styles):
+    """Exclusions & Notes section (shared across all types)."""
+    elements = []
+
+    exclusions = data.get("exclusions", [])
+    if exclusions:
+        elements.append(Spacer(1, 8))
+        elements.append(Paragraph("EXCLUSIONS", styles['SubHeading']))
+        for exc in exclusions:
+            elements.append(Paragraph(f"\u2022  {exc}", styles['SmallText']))
+
+    notes = data.get("notes", [])
+    if notes:
+        elements.append(Spacer(1, 6))
+        elements.append(Paragraph("NOTES", styles['SubHeading']))
+        for note in notes:
+            elements.append(Paragraph(f"\u2022  {note}", styles['SmallText']))
+
+    return elements
+
+
 def build_terms_section(data, styles):
-    """Terms & Conditions + Signature block."""
+    """Terms & Conditions + optional Signature block."""
     elements = []
     elements.append(Spacer(1, 12))
     elements.append(Paragraph("TERMS &amp; CONDITIONS", styles['SectionHeading']))
@@ -741,31 +762,34 @@ def build_terms_section(data, styles):
         elements.append(Paragraph(f"{i}. {term}", styles['SmallText']))
         elements.append(Spacer(1, 2))
 
-    # Signature block — keep together so it doesn't split across pages
-    sig_elements = []
-    sig_elements.append(Spacer(1, 12))
-    sig_data = [
-        ["ACCEPTED BY:", "", "ROOF EXPERTS:"],
-        ["", "", ""],
-        ["_" * 40, "", "_" * 40],
-        ["Signature", "", "Signature"],
-        ["", "", ""],
-        ["_" * 40, "", "_" * 40],
-        ["Printed Name", "", "Printed Name"],
-        ["", "", ""],
-        ["_" * 40, "", "_" * 40],
-        ["Date", "", "Date"],
-    ]
-    sig_table = Table(sig_data, colWidths=[2.8 * inch, 0.9 * inch, 2.8 * inch])
-    sig_table.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('TEXTCOLOR', (0, 0), (-1, -1), BRAND_GRAY),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-    ]))
-    sig_elements.append(sig_table)
-    elements.append(KeepTogether(sig_elements))
+    # Signature block — only for proposal types that need it (e.g., Re-Roof)
+    show_signature = data.get("show_signature_block", True)
+    if show_signature:
+        company_name = data.get("company_info", {}).get("name", "ROOF EXPERTS")
+        sig_elements = []
+        sig_elements.append(Spacer(1, 12))
+        sig_data = [
+            ["ACCEPTED BY:", "", f"{company_name}:"],
+            ["", "", ""],
+            ["_" * 40, "", "_" * 40],
+            ["Signature", "", "Signature"],
+            ["", "", ""],
+            ["_" * 40, "", "_" * 40],
+            ["Printed Name", "", "Printed Name"],
+            ["", "", ""],
+            ["_" * 40, "", "_" * 40],
+            ["Date", "", "Date"],
+        ]
+        sig_table = Table(sig_data, colWidths=[2.8 * inch, 0.9 * inch, 2.8 * inch])
+        sig_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 9),
+            ('TEXTCOLOR', (0, 0), (-1, -1), BRAND_GRAY),
+            ('TOPPADDING', (0, 0), (-1, -1), 2),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ]))
+        sig_elements.append(sig_table)
+        elements.append(KeepTogether(sig_elements))
 
     return elements
 
@@ -848,6 +872,9 @@ def generate_proposal_pdf(data: dict) -> bytes:
     ])
     if has_extras and data.get("grand_total"):
         story.extend(build_grand_total_section(data, styles))
+
+    # ── Global Exclusions & Notes (from proposal type presets) ──
+    story.extend(build_exclusions_notes_section(data, styles))
 
     # ── Terms & Signature ──
     story.extend(build_terms_section(data, styles))

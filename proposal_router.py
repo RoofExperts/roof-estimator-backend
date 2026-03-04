@@ -96,8 +96,19 @@ class ProposalRequest(BaseModel):
     # Grand total
     grand_total: str = ""
 
+    # Proposal type: gc, tenant_finish_out, reroof
+    proposal_type: str = "reroof"
+
     # Terms & conditions
     terms: List[str] = []
+
+    # Exclusions & notes (per-type defaults if empty)
+    exclusions: List[str] = []
+    notes: List[str] = []
+
+    # Layout options
+    show_signature_block: bool = True
+    show_prepared_for: bool = True
 
     # Company info overrides (defaults used if empty)
     company_info: Optional[Dict[str, Any]] = None
@@ -122,6 +133,118 @@ def _get_company_info_dict(db: Session) -> dict:
         "certifications": _parse_json_list(settings.certifications_json),
         "why_choose_us": _parse_json_list(settings.why_choose_us_json),
     }
+
+
+# ── Proposal Type Presets ─────────────────────────────────────
+
+PROPOSAL_TYPE_PRESETS = {
+    "gc": {
+        "label": "GC / New Construction",
+        "description": "Bid proposal for general contractors on new construction projects",
+        "default_pages": {
+            "include_metal_roof": False,
+            "include_wall_panels": False,
+            "include_awnings": False,
+        },
+        "show_signature_block": False,
+        "show_prepared_for": True,
+        "default_terms": [
+            "Pricing is based on plans and specifications provided. Any changes to scope will require a revised proposal.",
+            "Pricing valid for 30 days from the date of this proposal.",
+            "Work to commence per project schedule, weather permitting.",
+            "All work performed per manufacturer specifications and local building codes.",
+            "Manufacturer warranty on materials per specification requirements.",
+            "Payment terms: Net 30 from date of approved progress billing.",
+            "Roof Experts carries full general liability and workers' compensation insurance. Certificates available upon request.",
+            "This proposal does not include work by other trades unless specifically noted.",
+        ],
+        "default_exclusions": [
+            "Work by other trades (HVAC, electrical, plumbing penetrations by others)",
+            "Removal or relocation of rooftop equipment",
+            "Structural repairs or modifications",
+            "Hazardous material abatement",
+            "Permit fees (by GC unless otherwise noted)",
+            "Performance and payment bonds (available upon request at additional cost)",
+            "Temporary roofing or weather protection during construction by others",
+        ],
+        "default_notes": [
+            "Pricing based on normal working hours (Mon-Fri, 7AM-5PM). Overtime or weekend work at additional cost.",
+            "Access to roof and staging areas to be provided by GC at no cost.",
+            "GC to provide dumpster and crane/hoist access as needed.",
+            "Roof Experts to attend pre-construction and progress meetings as scheduled.",
+        ],
+    },
+    "tenant_finish_out": {
+        "label": "Tenant Finish Out",
+        "description": "Bid submission for tenant improvement and finish-out roofing work",
+        "default_pages": {
+            "include_metal_roof": False,
+            "include_wall_panels": False,
+            "include_awnings": False,
+        },
+        "show_signature_block": False,
+        "show_prepared_for": True,
+        "default_terms": [
+            "Payment terms: 50% deposit upon signed acceptance, balance due upon completion.",
+            "Work to commence within 2-3 weeks of signed acceptance, weather permitting.",
+            "All work performed in accordance with local building codes and manufacturer specifications.",
+            "Warranty: Manufacturer warranty on materials; 2-year workmanship warranty.",
+            "Any changes to scope of work will be documented via written change order.",
+            "This proposal is valid for 30 days from the date above.",
+            "Building owner/property management approval may be required prior to commencement.",
+        ],
+        "default_exclusions": [
+            "Interior ceiling repairs or replacement (by others)",
+            "HVAC modifications or curb work (unless specifically noted)",
+            "Electrical work or conduit relocation",
+            "Structural repairs or modifications",
+            "Hazardous material abatement (asbestos, lead paint, etc.)",
+            "Permit fees (unless specifically included)",
+            "After-hours or weekend work (available at additional cost)",
+        ],
+        "default_notes": [
+            "Tenant to coordinate building access and elevator use for material delivery.",
+            "Work area to be cleared and accessible prior to start date.",
+            "Roof Experts will coordinate with property management for roof access.",
+            "All work to be performed with minimal disruption to building tenants.",
+        ],
+    },
+    "reroof": {
+        "label": "Re-Roof",
+        "description": "Tear-off and replacement roofing proposal for existing buildings",
+        "default_pages": {
+            "include_metal_roof": False,
+            "include_wall_panels": False,
+            "include_awnings": False,
+        },
+        "show_signature_block": True,
+        "show_prepared_for": True,
+        "default_terms": [
+            "Payment terms: 50% deposit upon acceptance, balance due upon completion.",
+            "Work to commence within 2-4 weeks of signed acceptance, weather permitting.",
+            "All work performed in accordance with local building codes and manufacturer specifications.",
+            "Warranty: Manufacturer warranty on materials; 2-year workmanship warranty.",
+            "Any changes to scope of work will be documented via written change order.",
+            "This proposal is valid for 30 days from the date above.",
+        ],
+        "default_exclusions": [
+            "Structural repairs to deck or framing (if discovered, priced via change order)",
+            "Interior damage repairs (ceilings, insulation, drywall)",
+            "Removal or relocation of rooftop equipment (HVAC, solar, antennas)",
+            "Hazardous material abatement (asbestos, lead paint)",
+            "Electrical or plumbing work",
+            "Landscaping repair or protection",
+            "Permit fees (unless specifically included)",
+        ],
+        "default_notes": [
+            "Existing roof system to be removed down to deck and disposed of properly.",
+            "Roof deck to be inspected upon tear-off. Any damaged decking priced via change order.",
+            "Work hours: Monday-Friday, 7:00 AM - 5:00 PM unless otherwise arranged.",
+            "Dumpster placement and staging area required on-site during project.",
+            "Building occupants should be advised of noise during tear-off operations.",
+        ],
+    },
+}
 
 
 def _get_default_terms(db: Session) -> list:
@@ -196,6 +319,16 @@ async def generate_proposal(project_id: int, request: ProposalRequest, db: Sessi
 
         # Totals
         "grand_total": request.grand_total,
+
+        # Proposal type & layout
+        "proposal_type": request.proposal_type,
+        "show_signature_block": request.show_signature_block,
+        "show_prepared_for": request.show_prepared_for,
+
+        # Global exclusions & notes
+        "exclusions": request.exclusions,
+        "notes": request.notes,
+
         "terms": request.terms if request.terms else _get_default_terms(db),
     }
 
@@ -275,6 +408,35 @@ async def get_proposal_defaults(project_id: int, db: Session = Depends(get_db)):
         "company_info": _get_company_info_dict(db),
         "default_terms": _get_default_terms(db),
     }
+
+
+# ── Proposal Type Presets Endpoints ──────────────────────────
+
+@proposal_router.get("/proposal-types")
+async def list_proposal_types():
+    """Get all available proposal types with their presets."""
+    result = {}
+    for key, preset in PROPOSAL_TYPE_PRESETS.items():
+        result[key] = {
+            "label": preset["label"],
+            "description": preset["description"],
+            "default_pages": preset["default_pages"],
+            "show_signature_block": preset["show_signature_block"],
+            "show_prepared_for": preset["show_prepared_for"],
+            "default_terms": preset["default_terms"],
+            "default_exclusions": preset["default_exclusions"],
+            "default_notes": preset["default_notes"],
+        }
+    return result
+
+
+@proposal_router.get("/proposal-types/{proposal_type}")
+async def get_proposal_type(proposal_type: str):
+    """Get presets for a specific proposal type."""
+    preset = PROPOSAL_TYPE_PRESETS.get(proposal_type)
+    if not preset:
+        raise HTTPException(status_code=404, detail=f"Unknown proposal type: {proposal_type}")
+    return preset
 
 
 # ── Saved Proposal Models ────────────────────────────────────
