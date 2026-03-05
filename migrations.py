@@ -76,6 +76,10 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "material_templates", "calc_type", "VARCHAR"):
         changes += 1
 
+    # ── condition_materials table (created by Base.metadata.create_all) ──
+    # Just need to make sure any new columns are added if table already exists
+    # The table itself is created by SQLAlchemy's create_all in main.py
+
     # ====================================================================
     # MULTI-TENANT MIGRATIONS
     # ====================================================================

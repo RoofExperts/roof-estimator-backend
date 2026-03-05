@@ -1,20 +1,26 @@
 """
-Condition-Based Commercial Roofing Estimating Engine - Calculation Logic
+Conditions-Driven Commercial Roofing Estimate Engine
 
-This module provides the core calculation functions that:
-1. Retrieve conditions for a project
-2. Determine the project's roofing system (TPO, EPDM, PVC)
-3. Match material templates by condition type AND system type
-4. Calculate quantities based on coverage rates and waste
-5. Look up unit costs from the cost database
-6. Generate estimate line items and summary reports
+This engine calculates estimates directly from ConditionMaterial rows —
+the per-condition, per-project material list that users can edit.
+
+Flow:
+1. Load all conditions + their ConditionMaterial rows
+2. For each included material, calculate quantity using the appropriate formula
+3. Look up unit costs from the CostDatabaseItem table
+4. Produce two views:
+   - By Condition: materials grouped under each condition (for the accordion)
+   - Consolidated: same materials aggregated across conditions (for purchasing)
+5. Add labor, markup, tax → grand total
 """
 
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
+from conditions_models import (
+    RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem,
+    ConditionMaterial, CONDITION_TYPES
+)
 from models import Project
-from sqlalchemy import delete
 from typing import Dict, List, Optional
 import json
 
@@ -24,15 +30,7 @@ import json
 # ============================================================================
 
 def detect_system_type(project: "Project") -> str:
-    """
-    Determine the roofing system type for a project.
-
-    Priority:
-    1. project.system_type if explicitly set (user override)
-    2. Parsed from spec analysis_result (membrane_type field)
-    3. Default to 'TPO'
-    """
-    # 1. Explicit project system_type
+    """Determine the roofing system type for a project."""
     if project.system_type:
         st = project.system_type.upper().strip()
         if "EPDM" in st:
@@ -41,14 +39,18 @@ def detect_system_type(project: "Project") -> str:
             return "PVC"
         if "TPO" in st:
             return "TPO"
+        if "MOD" in st:
+            return "ModBit"
+        if "BUR" in st:
+            return "BUR"
+        if "STANDING" in st or "METAL" in st:
+            return "StandingSeam"
 
-    # 2. Parse from spec analysis
     if project.analysis_result:
         try:
             spec = json.loads(project.analysis_result) if isinstance(project.analysis_result, str) else project.analysis_result
             membrane = (spec.get("membrane_type") or "").upper()
             system_name = (spec.get("roof_system_type") or "").upper()
-
             if "EPDM" in membrane or "EPDM" in system_name:
                 return "EPDM"
             if "PVC" in membrane or "PVC" in system_name:
@@ -58,191 +60,58 @@ def detect_system_type(project: "Project") -> str:
         except (json.JSONDecodeError, TypeError, AttributeError):
             pass
 
-    return "TPO"  # Default
+    return "TPO"
 
 
 # ============================================================================
-# HELPER: SMART QUANTITY CALCULATOR
+# HELPER: CALCULATE QUANTITY FOR A CONDITION MATERIAL
 # ============================================================================
 
-def _calculate_quantity(condition: "RoofCondition", template: "MaterialTemplate") -> float:
+def _calculate_quantity(condition: RoofCondition, mat: ConditionMaterial) -> float:
     """
-    Calculate base quantity for a condition + template pair.
+    Calculate quantity for a condition material.
 
-    Special formulas:
-    - wall_flashing membrane: length × (flashing_height_inches + 18) / 12  → converts to linear feet of material
-    - wall_flashing fasteners: length / fastener_spacing_inches  → screws per LF
-    - all others: measurement_value × coverage_rate (standard)
-
-    calc_type field on MaterialTemplate (if present) drives special logic:
-      'wall_membrane'  → uses flashing height formula
-      'fastener'       → uses fastener spacing formula
-      None / anything else → standard
+    If override_quantity is set, use it directly.
+    Otherwise apply the formula based on calc_type:
+      - wall_membrane: length × (height_in + 18) / 12
+      - fastener: length / spacing_in
+      - standard: measurement × coverage_rate
+    Then apply waste factor.
     """
+    # User override
+    if mat.override_quantity is not None:
+        return mat.override_quantity
+
     measurement = condition.measurement_value
-    coverage = template.coverage_rate
-    calc_type = getattr(template, "calc_type", None)
+    coverage = mat.coverage_rate
+    calc_type = mat.calc_type
 
     if calc_type == "wall_membrane":
-        # TPO/EPDM/PVC sheet to cover wall: length × (height_in + 18") / 12
-        height_in = getattr(condition, "flashing_height", None) or 60.0
+        height_in = condition.flashing_height or 60.0
         width_ft = (height_in + 18.0) / 12.0
-        return measurement * width_ft * coverage
-
+        base = measurement * width_ft * coverage
     elif calc_type == "fastener":
-        # Screws/plates per linear foot based on spacing
-        spacing_in = getattr(condition, "fastener_spacing", None) or 12
+        spacing_in = condition.fastener_spacing or 12
         fasteners_per_lf = 12.0 / spacing_in
-        return measurement * fasteners_per_lf * coverage
-
+        base = measurement * fasteners_per_lf * coverage
     else:
-        # Standard: measurement × coverage_rate
-        return measurement * coverage
+        base = measurement * coverage
+
+    # Apply waste
+    return base * (1 + mat.waste_factor)
 
 
 # ============================================================================
-# MAIN CALCULATION FUNCTION
+# MAIN: CALCULATE ESTIMATE (conditions-driven)
 # ============================================================================
 
 def calculate_estimate(project_id: int, db: Session) -> Dict:
     """
-    Calculate the complete estimate for a project based on conditions and material templates.
+    Calculate the complete estimate from ConditionMaterial rows.
 
-    Now system-aware: only uses material templates matching the project's roofing system
-    (TPO, EPDM, PVC) plus 'common' templates shared across all systems.
-
-    Process:
-    1. Retrieve all conditions for the project
-    2. Determine the project's roofing system
-    3. For each condition, find matching material templates by condition_type AND system_type
-    4. For each template, calculate: quantity = measurement_value * coverage_rate * (1 + waste_factor)
-    5. Look up unit cost from cost database
-    6. Create EstimateLineItem records (delete old ones first)
-    7. Return success status and line item count
+    Returns a conditions_breakdown (for accordion view) and
+    consolidated_materials (for purchasing view).
     """
-
-    try:
-        # Verify project exists
-        project = db.query(Project).filter(Project.id == project_id).first()
-        if not project:
-            return {"status": "error", "message": f"Project {project_id} not found"}
-
-        # Determine system type
-        system_type = detect_system_type(project)
-        print(f"[Estimate] Project {project_id} system_type: {system_type}")
-
-        # Delete existing estimate line items for this project
-        db.query(EstimateLineItem).filter(EstimateLineItem.project_id == project_id).delete()
-        db.commit()
-
-        # Get all conditions for this project
-        conditions = db.query(RoofCondition).filter(RoofCondition.project_id == project_id).all()
-
-        if not conditions:
-            return {
-                "status": "success",
-                "message": "No conditions found for this project",
-                "system_type": system_type,
-                "line_items_created": 0,
-                "total_cost": 0.0
-            }
-
-        line_items_created = 0
-        total_cost = 0.0
-        errors = []
-
-        # Process each condition
-        for condition in conditions:
-            # Find material templates for this condition type AND system
-            # Include both system-specific templates and common templates
-            templates = db.query(MaterialTemplate).filter(
-                MaterialTemplate.condition_type == condition.condition_type,
-                MaterialTemplate.is_active == True,
-                or_(
-                    MaterialTemplate.system_type == system_type,
-                    MaterialTemplate.system_type == "common"
-                )
-            ).all()
-
-            # Generate line items from templates
-            for template in templates:
-                # Calculate quantity with waste (uses smart formula for wall flashing etc.)
-                base_quantity = _calculate_quantity(condition, template)
-                quantity = base_quantity * (1 + template.waste_factor)
-
-                # Look up cost from database
-                cost_item = db.query(CostDatabaseItem).filter(
-                    CostDatabaseItem.material_name == template.material_name,
-                    CostDatabaseItem.unit == template.unit,
-                    CostDatabaseItem.is_active == True
-                ).first()
-
-                if not cost_item:
-                    errors.append(
-                        f"No cost found for {template.material_name} ({template.unit}) "
-                        f"in condition {condition.id}"
-                    )
-                    continue
-
-                # Calculate total cost (material + optional labor)
-                unit_cost = cost_item.unit_cost
-                if cost_item.labor_cost_per_unit:
-                    unit_cost += cost_item.labor_cost_per_unit
-
-                item_total = quantity * unit_cost
-
-                # Create line item
-                line_item = EstimateLineItem(
-                    project_id=project_id,
-                    condition_id=condition.id,
-                    material_name=template.material_name,
-                    material_category=template.material_category,
-                    quantity=quantity,
-                    unit=template.unit,
-                    unit_cost=unit_cost,
-                    total_cost=item_total,
-                    notes=f"[{system_type}] {condition.description or condition.condition_type}"
-                )
-
-                db.add(line_item)
-                line_items_created += 1
-                total_cost += item_total
-
-        db.commit()
-
-        return {
-            "status": "success",
-            "system_type": system_type,
-            "line_items_created": line_items_created,
-            "total_cost": round(total_cost, 2),
-            "errors": errors if errors else None
-        }
-
-    except Exception as e:
-        db.rollback()
-        return {
-            "status": "error",
-            "message": f"Failed to calculate estimate: {str(e)}"
-        }
-
-
-# ============================================================================
-# ESTIMATE SUMMARY FUNCTION
-# ============================================================================
-
-def get_estimate_summary(project_id: int, db: Session) -> Dict:
-    """
-    Generate a structured summary of the estimate for a project.
-
-    Includes:
-    - Detected system type
-    - Conditions grouped with their line items
-    - Subtotals per condition
-    - Material and labor subtotals
-    - Material category breakdown
-    - Grand total
-    """
-
     try:
         project = db.query(Project).filter(Project.id == project_id).first()
         if not project:
@@ -250,7 +119,7 @@ def get_estimate_summary(project_id: int, db: Session) -> Dict:
 
         system_type = detect_system_type(project)
 
-        # Get all conditions with their line items
+        # Get all conditions for the project
         conditions = db.query(RoofCondition).filter(
             RoofCondition.project_id == project_id
         ).all()
@@ -258,105 +127,221 @@ def get_estimate_summary(project_id: int, db: Session) -> Dict:
         if not conditions:
             return {
                 "status": "success",
-                "project_id": project_id,
-                "project_name": project.project_name,
                 "system_type": system_type,
-                "conditions": [],
+                "conditions_breakdown": [],
+                "consolidated_materials": [],
                 "summary": {
-                    "material_subtotal": 0.0,
-                    "labor_subtotal": 0.0,
-                    "grand_total": 0.0,
-                    "category_breakdown": {}
-                }
+                    "materials_total": 0, "labor_total": 0,
+                    "subtotal": 0, "markup": 0, "tax": 0, "grand_total": 0,
+                },
             }
 
-        # Build condition details
-        conditions_detail = []
-        material_total = 0.0
-        labor_total = 0.0
-        category_breakdown = {}
+        # Also clear old EstimateLineItem records (legacy)
+        db.query(EstimateLineItem).filter(EstimateLineItem.project_id == project_id).delete()
+
+        conditions_breakdown = []
+        consolidated = {}  # material_name+unit → aggregated data
+        grand_materials_total = 0.0
+        errors = []
 
         for condition in conditions:
-            # Get line items for this condition
-            line_items = db.query(EstimateLineItem).filter(
-                EstimateLineItem.condition_id == condition.id
-            ).all()
+            materials = db.query(ConditionMaterial).filter(
+                ConditionMaterial.condition_id == condition.id
+            ).order_by(ConditionMaterial.sort_order).all()
 
-            condition_subtotal = 0.0
-            items = []
+            ct_info = CONDITION_TYPES.get(condition.condition_type, {"label": condition.condition_type})
+            condition_total = 0.0
+            material_rows = []
 
-            for item in line_items:
-                # Estimate material vs labor split
+            for mat in materials:
+                if not mat.is_included:
+                    material_rows.append({
+                        "id": mat.id,
+                        "material_name": mat.material_name,
+                        "material_category": mat.material_category,
+                        "unit": mat.unit,
+                        "coverage_rate": mat.coverage_rate,
+                        "waste_factor": mat.waste_factor,
+                        "qty_calculated": 0,
+                        "unit_cost": 0,
+                        "labor_cost": 0,
+                        "extended": 0,
+                        "is_included": False,
+                        "override_quantity": mat.override_quantity,
+                        "notes": mat.notes,
+                    })
+                    continue
+
+                qty = _calculate_quantity(condition, mat)
+
+                # Look up cost
                 cost_item = db.query(CostDatabaseItem).filter(
-                    CostDatabaseItem.material_name == item.material_name,
-                    CostDatabaseItem.unit == item.unit
+                    CostDatabaseItem.material_name == mat.material_name,
+                    CostDatabaseItem.is_active == True,
+                    or_(
+                        CostDatabaseItem.org_id == project.org_id,
+                        CostDatabaseItem.is_global == True
+                    )
                 ).first()
 
-                material_portion = item.total_cost
-                labor_portion = 0.0
+                unit_cost = 0.0
+                labor_cost = 0.0
+                if cost_item:
+                    unit_cost = cost_item.unit_cost or 0
+                    labor_cost = cost_item.labor_cost_per_unit or 0
+                else:
+                    errors.append(f"No cost found for '{mat.material_name}' ({mat.unit})")
 
-                if cost_item and cost_item.labor_cost_per_unit:
-                    labor_portion = item.quantity * cost_item.labor_cost_per_unit
-                    material_portion = item.total_cost - labor_portion
+                extended = round(qty * (unit_cost + labor_cost), 2)
+                condition_total += extended
+                grand_materials_total += extended
 
-                # Track category breakdown
-                category = item.material_category
-                if category not in category_breakdown:
-                    category_breakdown[category] = 0.0
-                category_breakdown[category] += item.total_cost
-
-                items.append({
-                    "id": item.id,
-                    "material_name": item.material_name,
-                    "material_category": item.material_category,
-                    "quantity": item.quantity,
-                    "unit": item.unit,
-                    "unit_cost": item.unit_cost,
-                    "total_cost": item.total_cost,
-                    "material_portion": round(material_portion, 2),
-                    "labor_portion": round(labor_portion, 2)
+                material_rows.append({
+                    "id": mat.id,
+                    "material_name": mat.material_name,
+                    "material_category": mat.material_category,
+                    "unit": mat.unit,
+                    "coverage_rate": mat.coverage_rate,
+                    "waste_factor": mat.waste_factor,
+                    "qty_calculated": round(qty, 2),
+                    "unit_cost": unit_cost,
+                    "labor_cost": labor_cost,
+                    "extended": extended,
+                    "is_included": True,
+                    "override_quantity": mat.override_quantity,
+                    "notes": mat.notes,
                 })
 
-                condition_subtotal += item.total_cost
-                material_total += material_portion
-                labor_total += labor_portion
+                # Aggregate into consolidated
+                key = f"{mat.material_name}|{mat.unit}"
+                if key not in consolidated:
+                    consolidated[key] = {
+                        "material_name": mat.material_name,
+                        "material_category": mat.material_category,
+                        "unit": mat.unit,
+                        "total_qty": 0,
+                        "unit_cost": unit_cost,
+                        "labor_cost": labor_cost,
+                        "total_cost": 0,
+                    }
+                consolidated[key]["total_qty"] = round(consolidated[key]["total_qty"] + qty, 2)
+                consolidated[key]["total_cost"] = round(consolidated[key]["total_cost"] + extended, 2)
 
-            conditions_detail.append({
-                "id": condition.id,
-                "condition_type": condition.condition_type,
-                "description": condition.description,
-                "measurement_value": condition.measurement_value,
-                "measurement_unit": condition.measurement_unit,
-                "wind_zone": condition.wind_zone,
-                "subtotal": round(condition_subtotal, 2),
-                "line_items": items
+                # Also write legacy EstimateLineItem for backward compat
+                line_item = EstimateLineItem(
+                    project_id=project_id,
+                    condition_id=condition.id,
+                    material_name=mat.material_name,
+                    material_category=mat.material_category,
+                    quantity=round(qty, 2),
+                    unit=mat.unit,
+                    unit_cost=unit_cost + labor_cost,
+                    total_cost=extended,
+                    notes=f"[{system_type}] {condition.description or ct_info['label']}"
+                )
+                db.add(line_item)
+
+            conditions_breakdown.append({
+                "condition": {
+                    "id": condition.id,
+                    "type": condition.condition_type,
+                    "label": ct_info["label"],
+                    "description": condition.description,
+                    "measurement": condition.measurement_value,
+                    "unit": condition.measurement_unit,
+                    "flashing_height": condition.flashing_height,
+                    "fastener_spacing": condition.fastener_spacing,
+                },
+                "materials": material_rows,
+                "condition_total": round(condition_total, 2),
             })
 
-        grand_total = material_total + labor_total
+        db.commit()
+
+        # Build consolidated list sorted by category
+        consolidated_list = sorted(consolidated.values(), key=lambda x: (x["material_category"], x["material_name"]))
+
+        # Calculate totals
+        # Labor: estimate at $85/square for field area
+        field_area = sum(
+            c.measurement_value for c in conditions
+            if c.condition_type == "field" and c.measurement_unit == "sqft"
+        )
+        squares = field_area / 100.0
+        labor_rate = 85.00  # per square
+        labor_total = round(squares * labor_rate, 2)
+
+        subtotal = round(grand_materials_total + labor_total, 2)
+        markup_pct = 0.25
+        markup = round(subtotal * markup_pct, 2)
+        subtotal_with_markup = round(subtotal + markup, 2)
+        tax_pct = 0.0825
+        tax = round(grand_materials_total * (1 + markup_pct) * tax_pct, 2)
+        grand_total = round(subtotal_with_markup + tax, 2)
+
+        # Parse spec for summary info
+        spec = {}
+        if project.analysis_result:
+            try:
+                spec = json.loads(project.analysis_result) if isinstance(project.analysis_result, str) else project.analysis_result
+            except:
+                spec = {}
 
         return {
             "status": "success",
-            "project_id": project_id,
-            "project_name": project.project_name,
             "system_type": system_type,
-            "conditions": conditions_detail,
             "summary": {
-                "material_subtotal": round(material_total, 2),
-                "labor_subtotal": round(labor_total, 2),
-                "grand_total": round(grand_total, 2),
-                "category_breakdown": {cat: round(cost, 2) for cat, cost in category_breakdown.items()}
-            }
+                "project_name": project.project_name,
+                "address": project.address or "",
+                "system_type": system_type,
+                "roof_area_sf": field_area,
+                "roof_area_sq": round(squares, 2),
+                "materials_total": round(grand_materials_total, 2),
+                "labor_total": labor_total,
+                "subtotal": subtotal,
+                "markup_pct": markup_pct,
+                "markup": markup,
+                "subtotal_with_markup": subtotal_with_markup,
+                "tax_pct": tax_pct,
+                "tax": tax,
+                "grand_total": grand_total,
+                "cost_summary": {
+                    "flat_materials": round(grand_materials_total, 2),
+                    "metals": 0,
+                    "labor": labor_total,
+                    "warranty": 0,
+                    "subtotal": subtotal,
+                    "markup_pct": markup_pct,
+                    "markup": markup,
+                    "subtotal_with_markup": subtotal_with_markup,
+                    "tax_pct": tax_pct,
+                    "tax": tax,
+                    "grand_total": grand_total,
+                },
+            },
+            "conditions_breakdown": conditions_breakdown,
+            "consolidated_materials": consolidated_list,
+            "errors": errors if errors else None,
         }
 
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Failed to generate estimate summary: {str(e)}"
-        }
+        db.rollback()
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "message": f"Failed to calculate estimate: {str(e)}"}
 
 
 # ============================================================================
-# HELPER FUNCTION: GET AVAILABLE CONDITION TYPES
+# ESTIMATE SUMMARY (backward compat — now just calls calculate_estimate)
+# ============================================================================
+
+def get_estimate_summary(project_id: int, db: Session) -> Dict:
+    """Generate estimate summary. Now delegates to calculate_estimate."""
+    return calculate_estimate(project_id, db)
+
+
+# ============================================================================
+# HELPER FUNCTIONS (kept for backward compat with router imports)
 # ============================================================================
 
 def get_available_condition_types(db: Session) -> List[str]:
@@ -364,24 +349,15 @@ def get_available_condition_types(db: Session) -> List[str]:
     templates = db.query(MaterialTemplate.condition_type).filter(
         MaterialTemplate.is_active == True
     ).distinct().all()
-
     return [t[0] for t in templates]
 
 
-# ============================================================================
-# HELPER FUNCTION: GET MATERIALS FOR CONDITION TYPE (system-aware)
-# ============================================================================
-
 def get_materials_for_condition(condition_type: str, db: Session, system_type: str = None) -> List[Dict]:
-    """
-    Get all active material templates for a specific condition type.
-    If system_type is provided, filters to that system + common templates.
-    """
+    """Get all active material templates for a specific condition type."""
     query = db.query(MaterialTemplate).filter(
         MaterialTemplate.condition_type == condition_type,
         MaterialTemplate.is_active == True
     )
-
     if system_type:
         query = query.filter(
             or_(
@@ -389,9 +365,7 @@ def get_materials_for_condition(condition_type: str, db: Session, system_type: s
                 MaterialTemplate.system_type == "common"
             )
         )
-
     templates = query.all()
-
     return [
         {
             "id": t.id,
