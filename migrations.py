@@ -137,6 +137,12 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "material_templates", "is_optional", "BOOLEAN", False):
         changes += 1
 
+    # ── cost_database_items: description + notes ──
+    if add_column_if_missing(engine, "cost_database_items", "description", "TEXT"):
+        changes += 1
+    if add_column_if_missing(engine, "cost_database_items", "notes", "TEXT"):
+        changes += 1
+
     if changes:
         print(f"[migrations] Applied {changes} migration(s).")
     else:

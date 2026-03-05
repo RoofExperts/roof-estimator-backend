@@ -240,7 +240,7 @@ class CostDatabaseItem(Base):
     to reflect market pricing. Can be toggled active/inactive.
     """
     __tablename__ = "cost_database_items"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     material_name = Column(String, nullable=False, index=True)
     manufacturer = Column(String, nullable=True, comment="Equipment/brand manufacturer")
@@ -253,6 +253,10 @@ class CostDatabaseItem(Base):
     unit = Column(String, nullable=False, comment="sqft, lnft, each, gallon, etc.")
     unit_cost = Column(Float, nullable=False, comment="Material cost per unit")
     labor_cost_per_unit = Column(Float, nullable=True, comment="Optional labor cost per unit")
+    description = Column(String, nullable=True,
+                         comment="Product description, R-value info, specs")
+    notes = Column(String, nullable=True,
+                   comment="Additional notes (R-value, psi, facers, etc.)")
     last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
     is_active = Column(Boolean, default=True, index=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,

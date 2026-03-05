@@ -293,7 +293,7 @@ def _try_assign_insulation_products(
 
     # Query cost database for insulation products with R-values
     insulation_items = db.query(CostDatabaseItem).filter(
-        CostDatabaseItem.category == "INSULATION",
+        CostDatabaseItem.material_category == "insulation",
         CostDatabaseItem.is_active == True,
         or_(
             CostDatabaseItem.org_id == org_id,
@@ -304,10 +304,11 @@ def _try_assign_insulation_products(
     # Filter to items with R-values and optionally matching type
     candidates = []
     for item in insulation_items:
-        r_val = _parse_r_value_from_notes(item.notes)
+        # Check both description and notes fields for R-value
+        r_val = _parse_r_value_from_notes(item.description) or _parse_r_value_from_notes(item.notes)
         if r_val <= 0:
             continue
-        name_lower = item.product_name.lower()
+        name_lower = item.material_name.lower()
         # Score by preference match
         score = 0
         for kw in preferred_keywords:
@@ -351,13 +352,13 @@ def _try_assign_insulation_products(
         ConditionMaterial.material_category == "insulation"
     ).order_by(ConditionMaterial.sort_order).all()
 
-    combo_desc = " + ".join([f"{item.product_name} (R-{r:.1f})" for item, r in best_combo])
+    combo_desc = " + ".join([f"{item.material_name} (R-{r:.1f})" for item, r in best_combo])
     recommendation = f"Target R-{target_r:.0f} → {combo_desc} = R-{best_total_r:.1f}"
 
     for idx, cm in enumerate(insulation_cms):
         if idx < len(best_combo):
             item, r_val = best_combo[idx]
-            cm.notes = f"Recommended: {item.product_name} (R-{r_val:.1f}) | {recommendation}"
+            cm.notes = f"Recommended: {item.material_name} (R-{r_val:.1f}) | {recommendation}"
             cm.is_included = True  # Turn on insulation layers when we have a recommendation
         else:
             cm.notes = recommendation

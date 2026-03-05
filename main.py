@@ -16,6 +16,7 @@ from seed_data import clone_seed_for_org
 from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem, ConditionMaterial
 from conditions_router import router as conditions_router
 from seed_data import seed_database
+from seed_data_generated import seed_manufacturer_products
 
 # Phase 2: AI Vision Plan Reader
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
@@ -47,6 +48,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         seed_database(db)
+        seed_manufacturer_products(db)
     finally:
         db.close()
     yield
