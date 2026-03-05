@@ -4,6 +4,7 @@ FastAPI endpoints for the AI Vision Plan Reader.
 
 import os
 import tempfile
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
@@ -15,6 +16,9 @@ from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction, Plan
 from conditions_models import RoofCondition, EstimateLineItem
 from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
+
+# Max time an analysis can be "processing" before we consider it stuck
+ANALYSIS_TIMEOUT_MINUTES = 10
 
 router = APIRouter(prefix="/api/v1", tags=["vision-plan-reader"])
 
@@ -303,10 +307,27 @@ def regenerate_conditions(plan_file_id: int, db: Session = Depends(get_db), curr
 
 @router.get("/plan-files/{plan_file_id}/status")
 def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
-    """Quick status check for plan analysis progress."""
+    """Quick status check for plan analysis progress.
+
+    Auto-detects stuck analyses: if status has been 'processing' for longer
+    than ANALYSIS_TIMEOUT_MINUTES, automatically resets to 'failed'.
+    """
     plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
     if not plan_file:
         raise HTTPException(status_code=404, detail="Plan file not found")
+
+    # Auto-detect stuck analysis
+    if plan_file.upload_status == "processing" and plan_file.updated_at:
+        now = datetime.now(timezone.utc)
+        updated = plan_file.updated_at
+        if updated.tzinfo is None:
+            updated = updated.replace(tzinfo=timezone.utc)
+        elapsed = now - updated
+        if elapsed > timedelta(minutes=ANALYSIS_TIMEOUT_MINUTES):
+            plan_file.upload_status = "failed"
+            plan_file.error_message = f"Analysis timed out after {ANALYSIS_TIMEOUT_MINUTES} minutes. Click Re-Analyze to try again."
+            db.commit()
+            print(f"[Vision] Auto-reset stuck analysis for plan_file {plan_file_id} (was processing for {elapsed})")
 
     extraction_count = db.query(VisionExtraction).filter(VisionExtraction.plan_file_id == plan_file_id).count()
     condition_count = db.query(VisionExtraction).filter(
@@ -316,6 +337,30 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             "page_count": plan_file.page_count, "detected_scale": plan_file.detected_scale,
             "extractions_count": extraction_count, "conditions_created": condition_count,
             "error_message": plan_file.error_message}
+
+
+@router.post("/plan-files/{plan_file_id}/reset-status")
+def reset_analysis_status(plan_file_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """Manually reset a stuck plan file analysis status.
+
+    Use this when an analysis is stuck in 'processing' state and won't complete.
+    Resets the status to 'failed' so the user can re-analyze.
+    """
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    old_status = plan_file.upload_status
+    plan_file.upload_status = "failed"
+    plan_file.error_message = f"Analysis manually reset (was: {old_status}). Click Re-Analyze to try again."
+    db.commit()
+
+    return {
+        "message": f"Status reset from '{old_status}' to 'failed'",
+        "plan_file_id": plan_file_id,
+        "previous_status": old_status,
+        "new_status": "failed",
+    }
 
 
 # ============================================================================
