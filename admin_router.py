@@ -44,6 +44,11 @@ class CompanySettingsUpdate(BaseModel):
     primary_color: Optional[str] = None
     secondary_color: Optional[str] = None
     accent_color: Optional[str] = None
+    # Estimate rate settings
+    markup_percent: Optional[float] = None
+    tax_rate: Optional[float] = None
+    labor_rate_per_square: Optional[float] = None
+    default_waste_factor: Optional[float] = None
 
 
 class CompanySettingsResponse(BaseModel):
@@ -65,6 +70,10 @@ class CompanySettingsResponse(BaseModel):
     primary_color: str
     secondary_color: str
     accent_color: str
+    markup_percent: float
+    tax_rate: float
+    labor_rate_per_square: float
+    default_waste_factor: float
     updated_at: Optional[str]
 
 
@@ -113,6 +122,10 @@ def _settings_to_response(settings: CompanySettings) -> dict:
         "primary_color": settings.primary_color or "#1e40af",
         "secondary_color": settings.secondary_color or "#475569",
         "accent_color": settings.accent_color or "#059669",
+        "markup_percent": settings.markup_percent if settings.markup_percent is not None else 25.0,
+        "tax_rate": settings.tax_rate if settings.tax_rate is not None else 8.25,
+        "labor_rate_per_square": settings.labor_rate_per_square if settings.labor_rate_per_square is not None else 85.0,
+        "default_waste_factor": settings.default_waste_factor if settings.default_waste_factor is not None else 10.0,
         "updated_at": settings.updated_at.isoformat() if settings.updated_at else None,
     }
 
@@ -168,7 +181,8 @@ def update_company_settings(updates: CompanySettingsUpdate, db: Session = Depend
 
         # Update simple string fields
         for field in ["name", "tagline", "phone", "email", "website", "address", "license_info", "about_text",
-                      "primary_color", "secondary_color", "accent_color"]:
+                      "primary_color", "secondary_color", "accent_color",
+                      "markup_percent", "tax_rate", "labor_rate_per_square", "default_waste_factor"]:
             value = getattr(updates, field, None)
             if value is not None:
                 setattr(settings, field, value)

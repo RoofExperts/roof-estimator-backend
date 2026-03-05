@@ -132,6 +132,12 @@ class CompanySettings(Base):
     # Per-proposal-type defaults (JSON dict of {type: {terms:[], exclusions:[], notes:[]}})
     proposal_type_defaults_json = Column(Text, nullable=True)
 
+    # Estimate rate settings
+    markup_percent = Column(Float, default=25.0, comment="Default markup percentage (e.g. 25.0 = 25%)")
+    tax_rate = Column(Float, default=8.25, comment="Sales tax rate (e.g. 8.25 = 8.25%)")
+    labor_rate_per_square = Column(Float, default=85.0, comment="Labor cost per roofing square (100 sqft)")
+    default_waste_factor = Column(Float, default=10.0, comment="Default waste factor percentage (e.g. 10.0 = 10%)")
+
     # Brand colors (hex values)
     primary_color = Column(String, default="#1e40af")
     secondary_color = Column(String, default="#475569")
