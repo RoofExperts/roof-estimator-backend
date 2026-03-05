@@ -15,25 +15,49 @@ import datetime
 
 
 # ============================================================================
+# CONDITION TYPES — the roof area breakouts an estimator uses
+# ============================================================================
+# Each maps to a default measurement unit and a set of material templates.
+CONDITION_TYPES = {
+    "field":          {"label": "Field of Roof",   "default_unit": "sqft"},
+    "wall_flashing":  {"label": "Wall Flashings",  "default_unit": "lnft"},
+    "roof_drain":     {"label": "Roof Drains",     "default_unit": "each"},
+    "scupper":        {"label": "Scuppers",        "default_unit": "each"},
+    "pipe_flashing":  {"label": "Pipe Flashings",  "default_unit": "each"},
+    "coping":         {"label": "Coping",          "default_unit": "lnft"},
+    "perimeter":      {"label": "Perimeter",       "default_unit": "lnft"},
+    "corner":         {"label": "Corners",         "default_unit": "sqft"},
+    "penetration":    {"label": "Penetrations",    "default_unit": "each"},
+    "expansion_joint":{"label": "Expansion Joints", "default_unit": "lnft"},
+    "curb":           {"label": "Curbs",           "default_unit": "lnft"},
+    "parapet":        {"label": "Parapets",        "default_unit": "lnft"},
+    "edge_detail":    {"label": "Edge Details",    "default_unit": "lnft"},
+    "transition":     {"label": "Transitions",     "default_unit": "lnft"},
+    "custom":         {"label": "Custom",          "default_unit": "sqft"},
+}
+
+
+# ============================================================================
 # ROOF CONDITION MODEL
 # ============================================================================
 
 class RoofCondition(Base):
     """
     Represents a single condition or zone on a roofing project.
-    
-    Condition types include field areas, perimeters, corners, penetrations,
-    edge details, transitions, and custom areas. Wind zones follow ASCE 7-16.
+
+    Condition types: field, wall_flashing, roof_drain, scupper, pipe_flashing,
+    coping, perimeter, corner, penetration, expansion_joint, curb, parapet,
+    edge_detail, transition, custom.
     """
     __tablename__ = "roof_conditions"
-    
+
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
     condition_type = Column(
         String,
         nullable=False,
         index=True,
-        comment="field, perimeter, corner, penetration, edge_detail, transition, custom"
+        comment="field, wall_flashing, roof_drain, scupper, pipe_flashing, coping, perimeter, etc."
     )
     description = Column(String, nullable=True)
     measurement_value = Column(Float, nullable=False, comment="Numeric measurement of the condition")
@@ -61,9 +85,58 @@ class RoofCondition(Base):
         comment="Fastener spacing in inches (e.g. 12 or 6). User selectable per condition."
     )
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    
+
     # Relationships
     estimate_items = relationship("EstimateLineItem", back_populates="condition")
+    materials = relationship("ConditionMaterial", back_populates="condition", cascade="all, delete-orphan")
+
+
+# ============================================================================
+# CONDITION MATERIAL MODEL  (per-condition editable material list)
+# ============================================================================
+
+class ConditionMaterial(Base):
+    """
+    A specific material attached to a specific condition instance.
+    Created by Smart Build from MaterialTemplates, then editable by the user.
+
+    The estimate engine reads these rows (not MaterialTemplates directly)
+    to calculate quantities and costs.
+    """
+    __tablename__ = "condition_materials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    condition_id = Column(Integer, ForeignKey("roof_conditions.id"), nullable=False, index=True)
+    material_template_id = Column(
+        Integer, ForeignKey("material_templates.id"), nullable=True,
+        comment="Source template (nullable for user-added custom materials)"
+    )
+    material_name = Column(String, nullable=False)
+    material_category = Column(
+        String, nullable=False,
+        comment="membrane, insulation, fastener, adhesive, flashing, sealant, accessory"
+    )
+    unit = Column(String, nullable=False, comment="sqft, lnft, each, gallon, etc.")
+    coverage_rate = Column(
+        Float, nullable=False,
+        comment="Units needed per unit of condition measurement"
+    )
+    waste_factor = Column(Float, default=0.10, comment="Waste percentage (0.10 = 10%)")
+    calc_type = Column(
+        String, nullable=True,
+        comment="Special calc: 'wall_membrane', 'fastener', or NULL=standard"
+    )
+    is_included = Column(Boolean, default=True, comment="User can toggle materials on/off")
+    override_quantity = Column(
+        Float, nullable=True,
+        comment="If set, use this qty instead of calculated. NULL = auto-calculate."
+    )
+    notes = Column(String, nullable=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    condition = relationship("RoofCondition", back_populates="materials")
 
 
 # ============================================================================

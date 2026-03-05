@@ -13,7 +13,7 @@ from spec_ai import analyze_spec_text_from_pdf
 from seed_data import clone_seed_for_org
 
 # Phase 1: Condition-based estimating engine
-from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem
+from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem, ConditionMaterial
 from conditions_router import router as conditions_router
 from seed_data import seed_database
 
@@ -587,6 +587,10 @@ def delete_project(
         raise HTTPException(status_code=404, detail="Project not found")
 
     db.query(EstimateLineItem).filter(EstimateLineItem.project_id == project_id).delete()
+    # Delete condition materials for all conditions in this project
+    condition_ids = [c.id for c in db.query(RoofCondition).filter(RoofCondition.project_id == project_id).all()]
+    if condition_ids:
+        db.query(ConditionMaterial).filter(ConditionMaterial.condition_id.in_(condition_ids)).delete(synchronize_session='fetch')
     plan_file_ids = [p.id for p in db.query(RoofPlanFile).filter(RoofPlanFile.project_id == project_id).all()]
     if plan_file_ids:
         db.query(VisionExtraction).filter(VisionExtraction.plan_file_id.in_(plan_file_ids)).delete(synchronize_session='fetch')

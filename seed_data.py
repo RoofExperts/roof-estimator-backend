@@ -44,6 +44,18 @@ def seed_material_templates(db: Session):
     t("common", "penetration", "Polyurethane Sealant", "sealant", "gallon", 0.10, 0.05)
     t("common", "penetration", "Pitch Pan", "accessory", "each", 1.0, 0.0)
 
+    # ── PIPE FLASHING (common) ──
+    t("common", "pipe_flashing", "Pipe Boot Flashing", "flashing", "each", 1.0, 0.0)
+    t("common", "pipe_flashing", "Polyurethane Sealant", "sealant", "each", 0.25, 0.05)
+
+    # ── COPING (common) ──
+    t("common", "coping", "Coping Metal (24ga)", "flashing", "lnft", 1.0, 0.05)
+    t("common", "coping", "Coping Fasteners", "fastener", "each", 3.0, 0.10)
+    t("common", "coping", "Polyurethane Sealant", "sealant", "gallon", 0.02, 0.10)
+
+    # ── CURB (common) ──
+    t("common", "curb", "Polyurethane Sealant", "sealant", "gallon", 0.05, 0.10)
+
     t("common", "edge_detail", "Metal Edge Flashing (24ga)", "flashing", "lnft", 1.0, 0.05)
     t("common", "edge_detail", "Drip Edge (Aluminum)", "flashing", "lnft", 1.0, 0.05)
     t("common", "edge_detail", "Polyurethane Sealant", "sealant", "gallon", 0.02, 0.10)
@@ -66,6 +78,18 @@ def seed_material_templates(db: Session):
     t("TPO", "edge_detail", "TPO Strip (6in)", "membrane", "lnft", 1.0, 0.10)
     t("TPO", "transition", "TPO 60mil Membrane", "membrane", "lnft", 2.0, 0.15)
 
+    # ======================== TPO: PIPE FLASHING ========================
+    t("TPO", "pipe_flashing", "TPO 60mil Membrane", "membrane", "sqft", 4.0, 0.15)
+    t("TPO", "pipe_flashing", "TPO Adhesive", "adhesive", "gallon", 0.05, 0.05)
+
+    # ======================== TPO: COPING ========================
+    t("TPO", "coping", "TPO 60mil Membrane", "membrane", "lnft", 1.5, 0.10)
+    t("TPO", "coping", "TPO Adhesive", "adhesive", "gallon", 0.02, 0.05)
+
+    # ======================== TPO: CURB ========================
+    t("TPO", "curb", "TPO 60mil Membrane", "membrane", "lnft", 3.0, 0.15)
+    t("TPO", "curb", "TPO Adhesive", "adhesive", "gallon", 0.03, 0.05)
+
     # ======================== TPO: ROOF DRAINS ========================
     # Each drain gets 1 tube of waterblock + 2 SF of TPO membrane
     t("TPO", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
@@ -87,6 +111,18 @@ def seed_material_templates(db: Session):
     t("TPO", "wall_flashing", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
     t("TPO", "wall_flashing", "Plastic Caps", "accessory", "each", 2.0, 0.05)
 
+    # ======================== EPDM: PIPE FLASHING ========================
+    t("EPDM", "pipe_flashing", "EPDM 45mil Membrane", "membrane", "sqft", 4.0, 0.15)
+    t("EPDM", "pipe_flashing", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.05, 0.05)
+
+    # ======================== EPDM: COPING ========================
+    t("EPDM", "coping", "EPDM 45mil Membrane", "membrane", "lnft", 1.5, 0.10)
+    t("EPDM", "coping", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.02, 0.05)
+
+    # ======================== EPDM: CURB ========================
+    t("EPDM", "curb", "EPDM 45mil Membrane", "membrane", "lnft", 3.0, 0.15)
+    t("EPDM", "curb", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.03, 0.05)
+
     # ======================== EPDM: ROOF DRAINS ========================
     t("EPDM", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
     t("EPDM", "roof_drain", "EPDM 45mil Membrane", "membrane", "sqft", 2.0, 0.10)
@@ -101,6 +137,18 @@ def seed_material_templates(db: Session):
     t("EPDM", "wall_flashing", "EPDM Bonding Adhesive", "adhesive", "gallon", 0.02, 0.05)
     t("EPDM", "wall_flashing", "Termination Bar", "accessory", "lnft", 1.0, 0.05)
     t("EPDM", "wall_flashing", "Plastic Caps", "accessory", "each", 2.0, 0.05)
+
+    # ======================== PVC: PIPE FLASHING ========================
+    t("PVC", "pipe_flashing", "PVC 60mil Membrane", "membrane", "sqft", 4.0, 0.15)
+    t("PVC", "pipe_flashing", "PVC Solvent Weld", "adhesive", "gallon", 0.05, 0.05)
+
+    # ======================== PVC: COPING ========================
+    t("PVC", "coping", "PVC 60mil Membrane", "membrane", "lnft", 1.5, 0.10)
+    t("PVC", "coping", "PVC Solvent Weld", "adhesive", "gallon", 0.02, 0.05)
+
+    # ======================== PVC: CURB ========================
+    t("PVC", "curb", "PVC 60mil Membrane", "membrane", "lnft", 3.0, 0.15)
+    t("PVC", "curb", "PVC Solvent Weld", "adhesive", "gallon", 0.03, 0.05)
 
     # ======================== PVC: ROOF DRAINS ========================
     t("PVC", "roof_drain", "Waterblock Sealant", "sealant", "each", 1.0, 0.0)
@@ -258,6 +306,10 @@ def seed_cost_database(db: Session):
     c("Screw and Plate (1.5in)", "OMG", "fastener", "each", 0.22, 0.08)
     c("Plastic Caps", "OMG", "accessory", "each", 0.08, 0.05)
     c("TPO Bonding Adhesive", "Carlisle", "adhesive", "gallon", 20.00, 5.00)
+
+    # Coping & misc
+    c("Coping Metal (24ga)", "Metal Era", "flashing", "lnft", 6.50, 4.00)
+    c("Coping Fasteners", "OMG", "fastener", "each", 0.25, 0.12)
 
     # ======================== MODIFIED BITUMEN PRICING ========================
     c("SBS Mod Bit Cap Sheet", "GAF", "membrane", "sqft", 0.95, 0.85)
