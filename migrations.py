@@ -145,6 +145,31 @@ def run_migrations(engine: Engine):
     # ── Backfill existing data into default org ──
     backfill_existing_data(engine)
 
+    # ── Ensure platform superadmin(s) ──
+    ensure_superadmins(engine)
+
+
+def ensure_superadmins(engine: Engine):
+    """
+    Promote designated emails to superadmin on every startup.
+    Idempotent — safe to re-run.
+    """
+    SUPERADMIN_EMAILS = [
+        "Anthonycass16@gmail.com",
+    ]
+    if not table_exists(engine, "users"):
+        return
+
+    with engine.connect() as conn:
+        for email in SUPERADMIN_EMAILS:
+            result = conn.execute(
+                text("UPDATE users SET is_superadmin = TRUE WHERE LOWER(email) = LOWER(:email) AND (is_superadmin IS NULL OR is_superadmin = FALSE)"),
+                {"email": email},
+            )
+            if result.rowcount:
+                print(f"[migrations] Promoted {email} to superadmin.")
+        conn.commit()
+
 
 def backfill_existing_data(engine: Engine):
     """
