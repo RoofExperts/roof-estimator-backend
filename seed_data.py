@@ -28,10 +28,23 @@ from conditions_models import MaterialTemplate, CostDatabaseItem
 
 def seed_material_templates(db: Session):
     """Seed global material templates for all roofing systems with proper build-up stacks."""
-    existing = db.query(MaterialTemplate).filter(MaterialTemplate.is_global == True).first()
-    if existing:
-        print("Global material templates already exist. Skipping seed.")
+    # Check if NEW templates (with sort_order > 0) exist — if so, already seeded
+    existing_new = db.query(MaterialTemplate).filter(
+        MaterialTemplate.is_global == True,
+        MaterialTemplate.sort_order > 0
+    ).first()
+    if existing_new:
+        print("Global material templates (with build-up stacks) already exist. Skipping seed.")
         return
+
+    # Delete old global templates that don't have sort_order (legacy seed data)
+    old_count = db.query(MaterialTemplate).filter(
+        MaterialTemplate.is_global == True,
+        MaterialTemplate.org_id == None
+    ).delete(synchronize_session=False)
+    if old_count:
+        db.commit()
+        print(f"[seed] Removed {old_count} old global templates to replace with build-up stack templates.")
 
     templates = []
 
