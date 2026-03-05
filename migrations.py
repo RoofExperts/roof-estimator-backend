@@ -121,6 +121,22 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "cost_database_items", "is_global", "BOOLEAN", False):
         changes += 1
 
+    # ── company_settings: estimate rate settings ──
+    if add_column_if_missing(engine, "company_settings", "markup_percent", "FLOAT", 25.0):
+        changes += 1
+    if add_column_if_missing(engine, "company_settings", "tax_rate", "FLOAT", 8.25):
+        changes += 1
+    if add_column_if_missing(engine, "company_settings", "labor_rate_per_square", "FLOAT", 85.0):
+        changes += 1
+    if add_column_if_missing(engine, "company_settings", "default_waste_factor", "FLOAT", 10.0):
+        changes += 1
+
+    # ── material_templates: sort_order + is_optional ──
+    if add_column_if_missing(engine, "material_templates", "sort_order", "INTEGER", 0):
+        changes += 1
+    if add_column_if_missing(engine, "material_templates", "is_optional", "BOOLEAN", False):
+        changes += 1
+
     if changes:
         print(f"[migrations] Applied {changes} migration(s).")
     else:

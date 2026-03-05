@@ -28,6 +28,7 @@ CONDITION_TYPES = {
     "perimeter":      {"label": "Perimeter",       "default_unit": "lnft"},
     "corner":         {"label": "Corners",         "default_unit": "sqft"},
     "penetration":    {"label": "Penetrations",    "default_unit": "each"},
+    "pitch_pan":      {"label": "Pitch Pans",      "default_unit": "each"},
     "expansion_joint":{"label": "Expansion Joints", "default_unit": "lnft"},
     "curb":           {"label": "Curbs",           "default_unit": "lnft"},
     "parapet":        {"label": "Parapets",        "default_unit": "lnft"},
@@ -186,6 +187,10 @@ class MaterialTemplate(Base):
         String, nullable=True,
         comment="Special calculation type: 'wall_membrane' (uses flashing height), 'fastener' (uses spacing), NULL=standard"
     )
+    sort_order = Column(Integer, default=0,
+                       comment="Display order within condition (lower = first in build-up stack)")
+    is_optional = Column(Boolean, default=False,
+                         comment="True = material is optional (e.g. base sheet, insulation layers)")
     is_active = Column(Boolean, default=True, index=True)
     org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,
                     comment="NULL + is_global=True = shared seed template")

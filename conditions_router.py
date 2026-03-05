@@ -914,6 +914,148 @@ def delete_cost_item(
 
 
 # ============================================================================
+# CONDITION PRESET ENDPOINTS (Company Admin Portal)
+# ============================================================================
+
+@router.get("/material-templates/by-condition")
+def get_templates_by_condition(
+    condition_type: str = Query(...),
+    system_type: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Get material templates grouped by condition type, ordered by sort_order.
+    Returns both org-specific and global templates (org takes precedence).
+    Used by the Company Admin Portal > Condition Presets tab.
+    """
+    org_id = current_user["org_id"]
+
+    # Build query for org-specific templates first, fall back to global
+    query = db.query(MaterialTemplate).filter(
+        MaterialTemplate.condition_type == condition_type,
+        MaterialTemplate.is_active == True,
+        or_(
+            MaterialTemplate.org_id == org_id,
+            MaterialTemplate.is_global == True
+        )
+    )
+    if system_type:
+        query = query.filter(
+            or_(MaterialTemplate.system_type == system_type,
+                MaterialTemplate.system_type == "common")
+        )
+
+    templates = query.order_by(MaterialTemplate.sort_order, MaterialTemplate.id).all()
+
+    # De-duplicate: if org has a custom version, skip the global one
+    seen = set()
+    result = []
+    # Org-specific first
+    for t in templates:
+        if t.org_id == org_id:
+            key = (t.system_type, t.material_name, t.material_category)
+            seen.add(key)
+            result.append(t)
+    # Then global fallbacks
+    for t in templates:
+        if t.is_global and t.org_id is None:
+            key = (t.system_type, t.material_name, t.material_category)
+            if key not in seen:
+                result.append(t)
+
+    result.sort(key=lambda x: (x.sort_order or 0, x.id))
+
+    return {
+        "condition_type": condition_type,
+        "system_type": system_type,
+        "templates": [
+            {
+                "id": t.id,
+                "system_type": t.system_type,
+                "condition_type": t.condition_type,
+                "material_name": t.material_name,
+                "material_category": t.material_category,
+                "unit": t.unit,
+                "coverage_rate": t.coverage_rate,
+                "waste_factor": t.waste_factor,
+                "calc_type": t.calc_type,
+                "sort_order": t.sort_order or 0,
+                "is_optional": t.is_optional or False,
+                "is_global": t.is_global,
+                "is_active": t.is_active,
+            }
+            for t in result
+        ]
+    }
+
+
+class ReorderRequest(BaseModel):
+    template_ids: List[int]  # ordered list of template IDs in desired sort order
+
+
+@router.put("/material-templates/reorder")
+def reorder_templates(
+    body: ReorderRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Bulk update sort_order for a list of material templates.
+    Accepts an ordered list of template IDs. Sets sort_order = index * 10.
+    """
+    org_id = current_user["org_id"]
+    updated = 0
+    for idx, tid in enumerate(body.template_ids):
+        t = db.query(MaterialTemplate).filter(MaterialTemplate.id == tid).first()
+        if t and (t.org_id == org_id or t.is_global):
+            # If it's a global template, clone it for this org first
+            if t.is_global and t.org_id is None:
+                new_t = MaterialTemplate(
+                    system_type=t.system_type, condition_type=t.condition_type,
+                    material_name=t.material_name, material_category=t.material_category,
+                    unit=t.unit, coverage_rate=t.coverage_rate, waste_factor=t.waste_factor,
+                    calc_type=t.calc_type, sort_order=(idx + 1) * 10,
+                    is_optional=t.is_optional, is_active=True,
+                    org_id=org_id, is_global=False
+                )
+                db.add(new_t)
+            else:
+                t.sort_order = (idx + 1) * 10
+            updated += 1
+    db.commit()
+    return {"status": "success", "updated": updated}
+
+
+class ResetConditionRequest(BaseModel):
+    condition_type: str
+    system_type: Optional[str] = None
+
+
+@router.post("/material-templates/reset-condition")
+def reset_condition_templates(
+    body: ResetConditionRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Reset a condition type back to global defaults for this org.
+    Deletes org-specific overrides so the global templates take effect.
+    """
+    org_id = current_user["org_id"]
+    query = db.query(MaterialTemplate).filter(
+        MaterialTemplate.org_id == org_id,
+        MaterialTemplate.condition_type == body.condition_type
+    )
+    if body.system_type:
+        query = query.filter(MaterialTemplate.system_type == body.system_type)
+
+    deleted = query.delete()
+    db.commit()
+    return {"status": "success", "deleted": deleted, "message": f"Reset {deleted} org-specific templates. Global defaults will now apply."}
+
+
+# ============================================================================
 # REFERENCE DATA ENDPOINTS
 # ============================================================================
 
