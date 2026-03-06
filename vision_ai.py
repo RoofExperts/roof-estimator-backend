@@ -111,17 +111,23 @@ def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str
     Uses concurrent.futures for a hard timeout that actually kills hung calls,
     since the OpenAI SDK timeout only applies to socket-level reads.
 
+    IMPORTANT: We use shutdown(wait=False) so that if a call times out,
+    we don't block waiting for the hung thread to finish.
+
     Args:
         detail: "high" for measurement extraction (needs precision),
                 "low" for page classification (just needs to see layout).
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_raw_vision_call, image_base64, prompt, detail)
-        try:
-            return future.result(timeout=CALL_TIMEOUT_SECONDS)
-        except concurrent.futures.TimeoutError:
-            print(f"[Vision] HARD TIMEOUT: GPT-4o call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
-            raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    future = executor.submit(_raw_vision_call, image_base64, prompt, detail)
+    try:
+        result = future.result(timeout=CALL_TIMEOUT_SECONDS)
+        executor.shutdown(wait=False)
+        return result
+    except concurrent.futures.TimeoutError:
+        print(f"[Vision] HARD TIMEOUT: GPT-4o call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
+        executor.shutdown(wait=False)  # Don't block waiting for the hung thread
+        raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
 
 
 def classify_page(image_base64: str) -> dict:
@@ -133,8 +139,11 @@ def classify_page(image_base64: str) -> dict:
 
 
 def detect_scale(image_base64: str) -> dict:
-    """Use GPT-4o to find and parse the drawing scale."""
-    return parse_vision_response(call_vision_api(image_base64, SCALE_DETECTION_PROMPT))
+    """Use GPT-4o to find and parse the drawing scale.
+    Uses detail='low' since scale notation is typically large text
+    that doesn't need pixel-level precision.
+    """
+    return parse_vision_response(call_vision_api(image_base64, SCALE_DETECTION_PROMPT, detail="low"))
 
 
 def extract_measurements_for_page(image_base64: str, page_type: str, scale_info: dict) -> dict:
@@ -424,39 +433,53 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         extract_page_nums = [p["page_number"] for p in pages_to_extract]
         print(f"[Vision] Pages selected for extraction: {extract_page_nums}")
 
-        # Step 3: Detect scale (try extraction pages first)
-        print("[Vision] Detecting scale...")
-        scale_info = {"scale_found": False}
-        for page_data in pages_to_extract:
-            scale_info = detect_scale(page_data["image_base64"])
-            if scale_info.get("scale_found"):
-                plan_file.detected_scale = scale_info.get("scale_notation")
-                plan_file.scale_confidence = scale_info.get("confidence", 0.0)
-                print(f"[Vision]   Scale found on page {page_data['page_number']}: {scale_info.get('scale_notation')}")
-                db.commit()
-                break
-            else:
-                print(f"[Vision]   No scale found on page {page_data['page_number']}, trying next...")
-
-        # Step 4: Extract measurements using page-type-specific prompts
+        # Steps 3+4 merged: Detect scale PER-PAGE and extract measurements.
+        # Different sheets in a commercial plan set can have different scales
+        # (e.g., roof plan at 1/16"=1', detail at 3/8"=1').
         all_measurements = []
         pages_with_extractions = []
+        file_scale_info = {"scale_found": False}  # Best/first scale for file-level display
+        page_scales = {}  # page_num -> scale_info for per-page tracking
 
         for ext_idx, page_data in enumerate(pages_to_extract):
             page_num = page_data["page_number"]
             page_type = page_classifications.get(page_num, {}).get("page_type", "unknown")
-            print(f"[Vision] Extracting from page {page_num} (type: {page_type})...")
+            print(f"[Vision] Processing page {page_num} (type: {page_type})...")
 
             # Heartbeat: keep updated_at fresh so stuck detector doesn't kill us
             plan_file.error_message = f"Extracting measurements... (page {ext_idx + 1}/{len(pages_to_extract)})"
             db.commit()
 
+            # Detect scale for THIS specific page (uses detail="low" so it's fast)
+            try:
+                page_scale = detect_scale(page_data["image_base64"])
+            except Exception as scale_err:
+                print(f"[Vision]   Page {page_num}: scale detection failed - {scale_err}")
+                page_scale = {"scale_found": False}
+
+            if page_scale.get("scale_found"):
+                page_scales[page_num] = page_scale
+                print(f"[Vision]   Page {page_num}: scale = {page_scale.get('scale_notation')}")
+                # Update file-level scale with the first (or highest-confidence) found
+                if not file_scale_info.get("scale_found") or \
+                   page_scale.get("confidence", 0) > file_scale_info.get("confidence", 0):
+                    file_scale_info = page_scale
+                    plan_file.detected_scale = page_scale.get("scale_notation")
+                    plan_file.scale_confidence = page_scale.get("confidence", 0.0)
+                    db.commit()
+            else:
+                print(f"[Vision]   Page {page_num}: no scale found, using fallback")
+
+            # Use page-specific scale if found, otherwise fall back to best file-level scale
+            scale_for_extraction = page_scale if page_scale.get("scale_found") else file_scale_info
+
+            # Extract measurements using page-type-specific prompt
             try:
                 measurements_result = extract_measurements_for_page(
-                    page_data["image_base64"], page_type, scale_info
+                    page_data["image_base64"], page_type, scale_for_extraction
                 )
             except Exception as page_err:
-                print(f"[Vision]   Page {page_num}: API call failed - {page_err}")
+                print(f"[Vision]   Page {page_num}: extraction failed - {page_err}")
                 continue
 
             if "error" in measurements_result:
@@ -466,9 +489,11 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             page_measurements = measurements_result.get("measurements", [])
             if page_measurements:
                 print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements")
+                page_scale_label = scale_for_extraction.get("scale_notation", "unknown")
                 for m in page_measurements:
                     m["_page_number"] = page_num
-                    print(f"[Vision]     - {m.get('type')}: {m.get('value')} {m.get('unit')}")
+                    m["_page_scale"] = page_scale_label
+                    print(f"[Vision]     - {m.get('type')}: {m.get('value')} {m.get('unit')} (scale: {page_scale_label})")
                 all_measurements.extend(page_measurements)
                 pages_with_extractions.append(page_num)
             else:
@@ -489,9 +514,15 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                         continue
                     page_type = cls.get("page_type", "unknown")
                     print(f"[Vision] Extended search: page {page_num} (type: {page_type})...")
+                    # Detect per-page scale for extended search pages too
+                    try:
+                        page_scale = detect_scale(page_data["image_base64"])
+                    except Exception:
+                        page_scale = {"scale_found": False}
+                    scale_for_ext = page_scale if page_scale.get("scale_found") else file_scale_info
                     try:
                         measurements_result = extract_measurements_for_page(
-                            page_data["image_base64"], page_type, scale_info
+                            page_data["image_base64"], page_type, scale_for_ext
                         )
                     except Exception as ext_err:
                         print(f"[Vision]   Extended search page {page_num}: API call failed - {ext_err}")
@@ -575,7 +606,7 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 confidence_score=confidence,
                 source_description=m.get("source", ""),
                 location_on_plan=m.get("location", ""),
-                notes=m.get("notes", ""),
+                notes=f"scale: {m.get('_page_scale', 'unknown')}" + (f"; {m.get('notes')}" if m.get("notes") else ""),
             )
             db.add(extraction)
             extraction_count += 1
@@ -600,8 +631,9 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             "pages_analyzed": len(page_images),
             "roof_pages_found": len(roof_pages),
             "pages_extracted_from": pages_with_extractions,
-            "scale_detected": scale_info.get("scale_found", False),
-            "scale": scale_info.get("scale_notation"),
+            "scale_detected": file_scale_info.get("scale_found", False),
+            "scale": file_scale_info.get("scale_notation"),
+            "page_scales": {str(k): v.get("scale_notation") for k, v in page_scales.items()},
             "extractions_count": extraction_count,
             "conditions_created": len(created_condition_ids),
             "condition_ids": created_condition_ids,
