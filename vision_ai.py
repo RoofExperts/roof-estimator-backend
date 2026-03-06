@@ -29,7 +29,10 @@ from vision_prompts import (
     validate_extraction,
 )
 
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=120.0,  # 2-minute timeout per API call to prevent hangs
+)
 
 MAX_PAGES = 20
 IMAGE_DPI = 150
@@ -332,7 +335,11 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 print(f"[Vision] Heartbeat: classified {idx}/{len(page_images)} pages")
             page_num = page_data["page_number"]
             print(f"[Vision] Classifying page {page_num}...")
-            classification = classify_page(page_data["image_base64"])
+            try:
+                classification = classify_page(page_data["image_base64"])
+            except Exception as cls_err:
+                print(f"[Vision]   Page {page_num}: classification failed - {cls_err}")
+                classification = {"page_type": "unknown", "is_roof_relevant": False}
 
             page_type = classification.get("page_type", "unknown")
             is_relevant = classification.get("is_roof_relevant", False)
@@ -427,9 +434,13 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             plan_file.error_message = f"Extracting measurements... (page {ext_idx + 1}/{len(pages_to_extract)})"
             db.commit()
 
-            measurements_result = extract_measurements_for_page(
-                page_data["image_base64"], page_type, scale_info
-            )
+            try:
+                measurements_result = extract_measurements_for_page(
+                    page_data["image_base64"], page_type, scale_info
+                )
+            except Exception as page_err:
+                print(f"[Vision]   Page {page_num}: API call failed - {page_err}")
+                continue
 
             if "error" in measurements_result:
                 print(f"[Vision]   Page {page_num}: extraction error - {measurements_result.get('error')}")
@@ -461,9 +472,13 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                         continue
                     page_type = cls.get("page_type", "unknown")
                     print(f"[Vision] Extended search: page {page_num} (type: {page_type})...")
-                    measurements_result = extract_measurements_for_page(
-                        page_data["image_base64"], page_type, scale_info
-                    )
+                    try:
+                        measurements_result = extract_measurements_for_page(
+                            page_data["image_base64"], page_type, scale_info
+                        )
+                    except Exception as ext_err:
+                        print(f"[Vision]   Extended search page {page_num}: API call failed - {ext_err}")
+                        continue
                     if "error" not in measurements_result:
                         page_measurements = measurements_result.get("measurements", [])
                         if page_measurements:

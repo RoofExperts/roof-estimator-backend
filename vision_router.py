@@ -358,10 +358,17 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
     condition_count = db.query(VisionExtraction).filter(
         VisionExtraction.plan_file_id == plan_file_id, VisionExtraction.condition_id.isnot(None)).count()
 
+    # Separate progress messages (during processing) from real errors (on failure)
+    error_msg = plan_file.error_message
+    progress_msg = None
+    if plan_file.upload_status == "processing" and error_msg and not error_msg.startswith("Analysis timed out"):
+        progress_msg = error_msg
+        error_msg = None
+
     return {"plan_file_id": plan_file_id, "status": plan_file.upload_status,
             "page_count": plan_file.page_count, "detected_scale": plan_file.detected_scale,
             "extractions_count": extraction_count, "conditions_created": condition_count,
-            "error_message": plan_file.error_message}
+            "error_message": error_msg, "progress_message": progress_msg}
 
 
 @router.get("/vision-health")
