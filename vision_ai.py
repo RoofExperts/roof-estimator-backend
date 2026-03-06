@@ -13,7 +13,7 @@ import os
 import io
 import json
 import base64
-import concurrent.futures
+import threading
 import fitz  # PyMuPDF
 from PIL import Image
 from openai import OpenAI
@@ -108,26 +108,40 @@ def _raw_vision_call(image_base64: str, prompt: str, detail: str) -> str:
 def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
     """Send an image to GPT-4o vision and return the response text.
 
-    Uses concurrent.futures for a hard timeout that actually kills hung calls,
-    since the OpenAI SDK timeout only applies to socket-level reads.
-
-    IMPORTANT: We use shutdown(wait=False) so that if a call times out,
-    we don't block waiting for the hung thread to finish.
+    Uses a raw daemon thread with join(timeout) for a hard timeout.
+    Previous approaches using concurrent.futures.ThreadPoolExecutor failed
+    because executor.shutdown() blocks even with wait=False in some cases.
+    A raw daemon thread with join(timeout) has NO cleanup that can block.
 
     Args:
         detail: "high" for measurement extraction (needs precision),
                 "low" for page classification (just needs to see layout).
     """
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(_raw_vision_call, image_base64, prompt, detail)
-    try:
-        result = future.result(timeout=CALL_TIMEOUT_SECONDS)
-        executor.shutdown(wait=False)
-        return result
-    except concurrent.futures.TimeoutError:
+    result_holder = {"value": None, "error": None}
+
+    def _run():
+        try:
+            result_holder["value"] = _raw_vision_call(image_base64, prompt, detail)
+        except Exception as e:
+            result_holder["error"] = e
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    thread.join(timeout=CALL_TIMEOUT_SECONDS)
+
+    if thread.is_alive():
+        # Thread is still running (hung API call). Since it's a daemon thread,
+        # it won't prevent process exit. We just abandon it and move on.
         print(f"[Vision] HARD TIMEOUT: GPT-4o call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
-        executor.shutdown(wait=False)  # Don't block waiting for the hung thread
         raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
+
+    if result_holder["error"]:
+        raise result_holder["error"]
+
+    if result_holder["value"] is None:
+        raise RuntimeError("Vision API call returned None")
+
+    return result_holder["value"]
 
 
 def classify_page(image_base64: str) -> dict:
