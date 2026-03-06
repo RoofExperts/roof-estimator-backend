@@ -545,6 +545,11 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
         print(f"[Vision] Total raw measurements found: {len(all_measurements)} from pages {pages_with_extractions}")
 
+        # Heartbeat: we made it past the extraction loop
+        plan_file.error_message = f"Saving {len(all_measurements)} measurements..."
+        db.commit()
+        print(f"[Vision] Extraction loop complete. Deduplicating...")
+
         # Step 5: Deduplicate and store extractions
         # For "eaches" items: sum across pages (e.g., drains on multiple elevations)
         # For area/length items: keep highest confidence
@@ -624,6 +629,8 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             overall_confidence = overall_confidence / extraction_count
 
         # Step 6: Auto-create conditions
+        plan_file.error_message = f"Creating conditions from {extraction_count} extractions..."
+        db.commit()
         print("[Vision] Auto-creating conditions...")
         created_condition_ids = auto_create_conditions(project_id, plan_file_id, db)
 
