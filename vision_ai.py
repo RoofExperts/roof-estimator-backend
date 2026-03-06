@@ -13,6 +13,7 @@ import os
 import io
 import json
 import base64
+import concurrent.futures
 import fitz  # PyMuPDF
 from PIL import Image
 from openai import OpenAI
@@ -81,14 +82,11 @@ def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
-    """Send an image to GPT-4o vision and return the response text.
+CALL_TIMEOUT_SECONDS = 90  # Hard timeout per GPT-4o API call
 
-    Args:
-        detail: "high" for measurement extraction (needs precision),
-                "low" for page classification (just needs to see layout).
-                Using "low" is ~3-5x faster and much cheaper.
-    """
+
+def _raw_vision_call(image_base64: str, prompt: str, detail: str) -> str:
+    """Internal: make the actual OpenAI API call (runs in executor thread)."""
     response = client.chat.completions.create(
         model=VISION_MODEL,
         messages=[{
@@ -103,9 +101,27 @@ def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str
         }],
         max_tokens=2000,
         temperature=0.1,
-        timeout=90,  # 90 second hard timeout per API call
     )
     return response.choices[0].message.content
+
+
+def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
+    """Send an image to GPT-4o vision and return the response text.
+
+    Uses concurrent.futures for a hard timeout that actually kills hung calls,
+    since the OpenAI SDK timeout only applies to socket-level reads.
+
+    Args:
+        detail: "high" for measurement extraction (needs precision),
+                "low" for page classification (just needs to see layout).
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_raw_vision_call, image_base64, prompt, detail)
+        try:
+            return future.result(timeout=CALL_TIMEOUT_SECONDS)
+        except concurrent.futures.TimeoutError:
+            print(f"[Vision] HARD TIMEOUT: GPT-4o call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
+            raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
 
 
 def classify_page(image_base64: str) -> dict:
