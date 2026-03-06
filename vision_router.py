@@ -18,7 +18,9 @@ from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
 
 # Max time an analysis can be "processing" before we consider it stuck
-ANALYSIS_TIMEOUT_MINUTES = 10
+# Base timeout + per-page allowance (large PDFs need more time for GPT-4o calls)
+ANALYSIS_TIMEOUT_BASE_MINUTES = 15
+ANALYSIS_TIMEOUT_PER_PAGE_MINUTES = 1.5  # ~90 sec per page for classify + extract
 
 router = APIRouter(prefix="/api/v1", tags=["vision-plan-reader"])
 
@@ -340,8 +342,12 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             if check_time.tzinfo is None:
                 check_time = check_time.replace(tzinfo=timezone.utc)
             elapsed = now - check_time
-            timeout = ANALYSIS_TIMEOUT_MINUTES if plan_file.upload_status == "processing" else ANALYSIS_TIMEOUT_MINUTES + 2
-            if elapsed > timedelta(minutes=timeout):
+            # Scale timeout based on page count (large PDFs need more time)
+            page_count = plan_file.page_count or 10  # assume 10 if unknown
+            timeout_mins = ANALYSIS_TIMEOUT_BASE_MINUTES + (page_count * ANALYSIS_TIMEOUT_PER_PAGE_MINUTES)
+            if plan_file.upload_status == "pending":
+                timeout_mins += 2  # extra grace for pending
+            if elapsed > timedelta(minutes=timeout_mins):
                 old_status = plan_file.upload_status
                 plan_file.upload_status = "failed"
                 plan_file.error_message = f"Analysis timed out (was '{old_status}' for {elapsed.total_seconds() / 60:.0f} min). Click Re-Analyze to try again."

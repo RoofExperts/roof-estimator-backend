@@ -78,8 +78,14 @@ def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-def call_vision_api(image_base64: str, prompt: str) -> str:
-    """Send an image to GPT-4o vision and return the response text."""
+def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
+    """Send an image to GPT-4o vision and return the response text.
+
+    Args:
+        detail: "high" for measurement extraction (needs precision),
+                "low" for page classification (just needs to see layout).
+                Using "low" is ~3-5x faster and much cheaper.
+    """
     response = client.chat.completions.create(
         model=VISION_MODEL,
         messages=[{
@@ -88,7 +94,7 @@ def call_vision_api(image_base64: str, prompt: str) -> str:
                 {"type": "text", "text": prompt},
                 {"type": "image_url", "image_url": {
                     "url": f"data:image/jpeg;base64,{image_base64}",
-                    "detail": "high",
+                    "detail": detail,
                 }},
             ],
         }],
@@ -99,8 +105,11 @@ def call_vision_api(image_base64: str, prompt: str) -> str:
 
 
 def classify_page(image_base64: str) -> dict:
-    """Use GPT-4o to classify what type of architectural page this is."""
-    return parse_vision_response(call_vision_api(image_base64, PAGE_TYPE_PROMPT))
+    """Use GPT-4o to classify what type of architectural page this is.
+    Uses detail='low' since classification only needs to see the general layout,
+    not read fine measurements. This is ~3-5x faster than 'high' detail.
+    """
+    return parse_vision_response(call_vision_api(image_base64, PAGE_TYPE_PROMPT, detail="low"))
 
 
 def detect_scale(image_base64: str) -> dict:
@@ -310,12 +319,17 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             db.commit()
             return {"status": "error", "message": "No pages found in PDF"}
 
-        # Step 2: Classify each page
+        # Step 2: Classify each page (using detail="low" for speed)
         print(f"[Vision] Classifying {len(page_images)} pages...")
         roof_pages = []
         page_classifications = {}
 
-        for page_data in page_images:
+        for idx, page_data in enumerate(page_images):
+            # Heartbeat: update timestamp every 5 pages so stuck detector knows we're alive
+            if idx > 0 and idx % 5 == 0:
+                plan_file.error_message = f"Classifying pages... ({idx}/{len(page_images)})"
+                db.commit()
+                print(f"[Vision] Heartbeat: classified {idx}/{len(page_images)} pages")
             page_num = page_data["page_number"]
             print(f"[Vision] Classifying page {page_num}...")
             classification = classify_page(page_data["image_base64"])
@@ -404,10 +418,14 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         all_measurements = []
         pages_with_extractions = []
 
-        for page_data in pages_to_extract:
+        for ext_idx, page_data in enumerate(pages_to_extract):
             page_num = page_data["page_number"]
             page_type = page_classifications.get(page_num, {}).get("page_type", "unknown")
             print(f"[Vision] Extracting from page {page_num} (type: {page_type})...")
+
+            # Heartbeat: keep updated_at fresh so stuck detector doesn't kill us
+            plan_file.error_message = f"Extracting measurements... (page {ext_idx + 1}/{len(pages_to_extract)})"
+            db.commit()
 
             measurements_result = extract_measurements_for_page(
                 page_data["image_base64"], page_type, scale_info
@@ -434,6 +452,8 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             remaining = [p for p in page_images if p["page_number"] not in tried_pages]
             if remaining:
                 print(f"[Vision] Few extractions so far - trying {len(remaining)} remaining pages...")
+                plan_file.error_message = f"Extended search... ({len(remaining)} extra pages)"
+                db.commit()
                 for page_data in remaining:
                     page_num = page_data["page_number"]
                     cls = page_classifications.get(page_num, {})
@@ -539,6 +559,7 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         created_condition_ids = auto_create_conditions(project_id, plan_file_id, db)
 
         plan_file.upload_status = "completed"
+        plan_file.error_message = None  # Clear any progress messages
         db.commit()
 
         result = {
