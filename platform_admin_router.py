@@ -267,6 +267,105 @@ def deactivate_organization(
     return {"message": f"Organization '{org.name}' deactivated. {len(members)} members removed."}
 
 
+class MergeOrgsRequest(BaseModel):
+    source_org_id: int
+    target_org_id: int
+
+
+@router.post("/organizations/merge")
+def merge_organizations(
+    data: MergeOrgsRequest,
+    db: Session = Depends(get_db),
+    admin: dict = Depends(require_superadmin),
+):
+    """
+    Merge source org INTO target org.
+    Moves all projects, customers, proposals, members, templates, and cost items.
+    Then deletes the source org's membership records and settings.
+    """
+    source = db.query(Organization).filter(Organization.id == data.source_org_id).first()
+    target = db.query(Organization).filter(Organization.id == data.target_org_id).first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source organization not found")
+    if not target:
+        raise HTTPException(status_code=404, detail="Target organization not found")
+    if source.id == target.id:
+        raise HTTPException(status_code=400, detail="Cannot merge an organization into itself")
+
+    results = {"source": source.name, "target": target.name, "moved": {}}
+
+    # 1. Move projects
+    from sqlalchemy import update
+    count = db.query(Project).filter(Project.org_id == source.id).update(
+        {Project.org_id: target.id}, synchronize_session=False
+    )
+    results["moved"]["projects"] = count
+
+    # 2. Move customers
+    count = db.query(Customer).filter(Customer.org_id == source.id).update(
+        {Customer.org_id: target.id}, synchronize_session=False
+    )
+    results["moved"]["customers"] = count
+
+    # 3. Move saved proposals
+    count = db.query(SavedProposal).filter(SavedProposal.org_id == source.id).update(
+        {SavedProposal.org_id: target.id}, synchronize_session=False
+    )
+    results["moved"]["proposals"] = count
+
+    # 4. Move org-specific material templates (not global ones)
+    count = db.query(MaterialTemplate).filter(
+        MaterialTemplate.org_id == source.id,
+        MaterialTemplate.is_global == False
+    ).update({MaterialTemplate.org_id: target.id}, synchronize_session=False)
+    results["moved"]["material_templates"] = count
+
+    # 5. Move org-specific cost database items
+    count = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.org_id == source.id,
+        CostDatabaseItem.is_global == False
+    ).update({CostDatabaseItem.org_id: target.id}, synchronize_session=False)
+    results["moved"]["cost_items"] = count
+
+    # 6. Move members (avoid duplicates)
+    source_members = db.query(OrganizationMember).filter(
+        OrganizationMember.org_id == source.id
+    ).all()
+    members_moved = 0
+    for m in source_members:
+        # Check if user is already a member of target org
+        existing = db.query(OrganizationMember).filter(
+            OrganizationMember.org_id == target.id,
+            OrganizationMember.user_id == m.user_id
+        ).first()
+        if existing:
+            # User already in target — just delete source membership
+            db.delete(m)
+        else:
+            # Move membership to target org
+            m.org_id = target.id
+            members_moved += 1
+        # Update user's current_org_id
+        user = db.query(User).filter(User.id == m.user_id).first()
+        if user and user.current_org_id == source.id:
+            user.current_org_id = target.id
+    results["moved"]["members"] = members_moved
+
+    # 7. Delete source org settings
+    source_settings = db.query(CompanySettings).filter(
+        CompanySettings.org_id == source.id
+    ).all()
+    for s in source_settings:
+        db.delete(s)
+
+    # 8. Delete the source org itself
+    db.delete(source)
+    db.commit()
+
+    results["message"] = f"Merged '{source.name}' into '{target.name}' successfully"
+    return results
+
+
 # ============================================================================
 # USER MANAGEMENT
 # ============================================================================
