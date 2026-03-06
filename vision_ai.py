@@ -35,8 +35,8 @@ client = OpenAI(
 )
 
 MAX_PAGES = 20
-IMAGE_DPI = 150
-MAX_IMAGE_SIZE_MB = 4.0
+IMAGE_DPI = 120  # Lowered from 150 to reduce image size and API latency
+MAX_IMAGE_SIZE_MB = 3.0  # Lowered from 4MB to speed up API calls
 VISION_MODEL = "gpt-4o"
 MAX_EXTRACTION_PAGES = 10  # Analyze up to 10 pages for measurements
 
@@ -103,6 +103,7 @@ def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str
         }],
         max_tokens=2000,
         temperature=0.1,
+        timeout=90,  # 90 second hard timeout per API call
     )
     return response.choices[0].message.content
 
