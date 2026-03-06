@@ -158,22 +158,38 @@ def run_migrations(engine: Engine):
 def ensure_superadmins(engine: Engine):
     """
     Promote designated emails to superadmin on every startup.
+    Also ensures they have 'owner' role in their organization.
     Idempotent — safe to re-run.
     """
     SUPERADMIN_EMAILS = [
         "Anthonycass16@gmail.com",
+        "Anthony@roofexperts.com",
     ]
     if not table_exists(engine, "users"):
         return
 
     with engine.connect() as conn:
         for email in SUPERADMIN_EMAILS:
+            # Promote to superadmin
             result = conn.execute(
                 text("UPDATE users SET is_superadmin = TRUE WHERE LOWER(email) = LOWER(:email) AND (is_superadmin IS NULL OR is_superadmin = FALSE)"),
                 {"email": email},
             )
             if result.rowcount:
                 print(f"[migrations] Promoted {email} to superadmin.")
+
+            # Also ensure owner role in their org membership
+            if table_exists(engine, "organization_members"):
+                # Get user_id for this email
+                user_row = conn.execute(
+                    text("SELECT id, current_org_id FROM users WHERE LOWER(email) = LOWER(:email)"),
+                    {"email": email},
+                ).fetchone()
+                if user_row and user_row[1]:
+                    conn.execute(
+                        text("UPDATE organization_members SET role = 'owner' WHERE user_id = :uid AND org_id = :oid AND role != 'owner'"),
+                        {"uid": user_row[0], "oid": user_row[1]},
+                    )
         conn.commit()
 
 
