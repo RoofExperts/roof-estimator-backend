@@ -412,9 +412,16 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
         RoofCondition.project_id == project_id,
         RoofCondition.description.like("%[AI%")
     ).all()
-    for c in existing_ai:
-        db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
-        db.delete(c)
+    if existing_ai:
+        ai_condition_ids = [c.id for c in existing_ai]
+        # Null out FK references in vision_extractions BEFORE deleting conditions
+        db.query(VisionExtraction).filter(
+            VisionExtraction.condition_id.in_(ai_condition_ids)
+        ).update({VisionExtraction.condition_id: None}, synchronize_session=False)
+        db.flush()
+        for c in existing_ai:
+            db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
+            db.delete(c)
     db.commit()
 
     # Step 4: Gather plan extractions
