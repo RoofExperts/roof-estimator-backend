@@ -286,6 +286,15 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         return {"status": "error", "message": "Plan file not found"}
 
     try:
+        # Pre-flight check: verify OpenAI API key is configured
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            plan_file.upload_status = "failed"
+            plan_file.error_message = "OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
+            db.commit()
+            print("[Vision] ERROR: OPENAI_API_KEY not set")
+            return {"status": "error", "message": "OpenAI API key not configured"}
+
         plan_file.upload_status = "processing"
         db.commit()
 
@@ -557,9 +566,38 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
 
 def run_plan_analysis_background(project_id: int, plan_file_id: int, file_path: str):
-    """Background task wrapper. Creates its own DB session."""
+    """Background task wrapper. Creates its own DB session.
+
+    Ensures plan_file status is ALWAYS updated, even if the analysis crashes
+    with an unexpected error (OOM, missing env vars, import errors, etc.)
+    """
     db = SessionLocal()
     try:
         run_plan_analysis(project_id, plan_file_id, file_path, db)
+    except Exception as e:
+        # Catch-all: if run_plan_analysis itself raises (shouldn't happen
+        # since it has its own try/except, but this is a safety net)
+        print(f"[Vision] Background task crashed for plan_file {plan_file_id}: {e}")
+        try:
+            plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+            if plan_file and plan_file.upload_status not in ("completed", "failed"):
+                plan_file.upload_status = "failed"
+                plan_file.error_message = f"Background task crashed: {str(e)[:400]}"
+                db.commit()
+        except Exception as inner_e:
+            print(f"[Vision] Failed to update status after crash: {inner_e}")
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
+        # Clean up temp file
+        try:
+            import os
+            if file_path and os.path.exists(file_path):
+                os.unlink(file_path)
+                parent = os.path.dirname(file_path)
+                if parent and os.path.isdir(parent):
+                    os.rmdir(parent)
+        except Exception:
+            pass

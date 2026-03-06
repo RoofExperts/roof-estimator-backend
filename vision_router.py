@@ -184,9 +184,24 @@ def reanalyze_plan(
 @router.get("/projects/{project_id}/plan-files")
 def list_plan_files(project_id: int, db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """List all uploaded plan files for a project."""
-    return db.query(RoofPlanFile).filter(
+    plans = db.query(RoofPlanFile).filter(
         RoofPlanFile.project_id == project_id
     ).order_by(RoofPlanFile.created_at.desc()).all()
+    return [
+        {
+            "id": p.id,
+            "project_id": p.project_id,
+            "file_name": p.file_name,
+            "file_type": p.file_type,
+            "upload_status": p.upload_status,
+            "page_count": p.page_count,
+            "detected_scale": p.detected_scale,
+            "scale_confidence": p.scale_confidence,
+            "error_message": p.error_message,
+            "created_at": str(p.created_at) if p.created_at else None,
+        }
+        for p in plans
+    ]
 
 
 @router.get("/plan-files/{plan_file_id}")
@@ -316,18 +331,22 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
     if not plan_file:
         raise HTTPException(status_code=404, detail="Plan file not found")
 
-    # Auto-detect stuck analysis
-    if plan_file.upload_status == "processing" and plan_file.updated_at:
-        now = datetime.now(timezone.utc)
-        updated = plan_file.updated_at
-        if updated.tzinfo is None:
-            updated = updated.replace(tzinfo=timezone.utc)
-        elapsed = now - updated
-        if elapsed > timedelta(minutes=ANALYSIS_TIMEOUT_MINUTES):
-            plan_file.upload_status = "failed"
-            plan_file.error_message = f"Analysis timed out after {ANALYSIS_TIMEOUT_MINUTES} minutes. Click Re-Analyze to try again."
-            db.commit()
-            print(f"[Vision] Auto-reset stuck analysis for plan_file {plan_file_id} (was processing for {elapsed})")
+    # Auto-detect stuck analysis (covers both "processing" and "pending" states)
+    if plan_file.upload_status in ("processing", "pending"):
+        # Use updated_at if available, fall back to created_at
+        check_time = plan_file.updated_at or plan_file.created_at
+        if check_time:
+            now = datetime.now(timezone.utc)
+            if check_time.tzinfo is None:
+                check_time = check_time.replace(tzinfo=timezone.utc)
+            elapsed = now - check_time
+            timeout = ANALYSIS_TIMEOUT_MINUTES if plan_file.upload_status == "processing" else ANALYSIS_TIMEOUT_MINUTES + 2
+            if elapsed > timedelta(minutes=timeout):
+                old_status = plan_file.upload_status
+                plan_file.upload_status = "failed"
+                plan_file.error_message = f"Analysis timed out (was '{old_status}' for {elapsed.total_seconds() / 60:.0f} min). Click Re-Analyze to try again."
+                db.commit()
+                print(f"[Vision] Auto-reset stuck analysis for plan_file {plan_file_id} (was {old_status} for {elapsed})")
 
     extraction_count = db.query(VisionExtraction).filter(VisionExtraction.plan_file_id == plan_file_id).count()
     condition_count = db.query(VisionExtraction).filter(
@@ -337,6 +356,62 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             "page_count": plan_file.page_count, "detected_scale": plan_file.detected_scale,
             "extractions_count": extraction_count, "conditions_created": condition_count,
             "error_message": plan_file.error_message}
+
+
+@router.get("/vision-health")
+def vision_health_check(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
+    """Diagnostic endpoint to check if the vision analysis pipeline is configured correctly."""
+    import importlib
+    checks = {}
+
+    # Check OpenAI API key
+    openai_key = os.getenv("OPENAI_API_KEY")
+    checks["openai_api_key"] = "set" if openai_key else "MISSING"
+
+    # Check required libraries
+    for lib_name in ["fitz", "PIL", "openai"]:
+        try:
+            importlib.import_module(lib_name)
+            checks[f"lib_{lib_name}"] = "ok"
+        except ImportError:
+            checks[f"lib_{lib_name}"] = "MISSING"
+
+    # Check S3 config
+    checks["aws_bucket"] = "set" if os.getenv("AWS_BUCKET_NAME") else "MISSING"
+    checks["aws_region"] = "set" if os.getenv("AWS_REGION") else "MISSING"
+    checks["aws_access_key"] = "set" if os.getenv("AWS_ACCESS_KEY_ID") else "MISSING"
+
+    # Check for stuck plan files
+    from sqlalchemy import func
+    stuck_processing = db.query(RoofPlanFile).filter(RoofPlanFile.upload_status == "processing").count()
+    stuck_pending = db.query(RoofPlanFile).filter(RoofPlanFile.upload_status == "pending").count()
+    total_plans = db.query(RoofPlanFile).count()
+    completed_plans = db.query(RoofPlanFile).filter(RoofPlanFile.upload_status == "completed").count()
+    failed_plans = db.query(RoofPlanFile).filter(RoofPlanFile.upload_status == "failed").count()
+
+    # Check material templates
+    from conditions_models import MaterialTemplate
+    global_templates = db.query(MaterialTemplate).filter(
+        MaterialTemplate.is_global == True,
+        MaterialTemplate.sort_order > 0
+    ).count()
+
+    checks["plans_total"] = total_plans
+    checks["plans_completed"] = completed_plans
+    checks["plans_failed"] = failed_plans
+    checks["plans_stuck_processing"] = stuck_processing
+    checks["plans_stuck_pending"] = stuck_pending
+    checks["global_templates_with_sort_order"] = global_templates
+
+    all_ok = (
+        checks["openai_api_key"] == "set" and
+        checks["lib_fitz"] == "ok" and
+        checks["lib_PIL"] == "ok" and
+        checks["lib_openai"] == "ok" and
+        checks["aws_bucket"] == "set"
+    )
+
+    return {"status": "healthy" if all_ok else "issues_found", "checks": checks}
 
 
 @router.post("/plan-files/{plan_file_id}/reset-status")
