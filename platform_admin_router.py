@@ -272,7 +272,7 @@ class MergeOrgsRequest(BaseModel):
     target_org_id: int
 
 
-@router.post("/organizations/merge")
+@router.post("/merge-organizations")
 def merge_organizations(
     data: MergeOrgsRequest,
     db: Session = Depends(get_db),
