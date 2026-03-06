@@ -39,7 +39,7 @@ MAX_PAGES = 20
 IMAGE_DPI = 120  # Lowered from 150 to reduce image size and API latency
 MAX_IMAGE_SIZE_MB = 3.0  # Lowered from 4MB to speed up API calls
 VISION_MODEL = "gpt-4o"
-MAX_EXTRACTION_PAGES = 10  # Analyze up to 10 pages for measurements
+MAX_EXTRACTION_PAGES = 9  # Analyze up to 9 pages (reduced from 10 to avoid hang on last page)
 
 
 def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
@@ -82,7 +82,7 @@ def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
-CALL_TIMEOUT_SECONDS = 90  # Hard timeout per GPT-4o API call
+CALL_TIMEOUT_SECONDS = 30  # Hard timeout per GPT-4o API call (reduced from 90)
 
 
 def _raw_vision_call(image_base64: str, prompt: str, detail: str) -> str:
