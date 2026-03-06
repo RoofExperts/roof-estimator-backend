@@ -13,10 +13,10 @@ import os
 import io
 import json
 import base64
-import threading
+import asyncio
 import fitz  # PyMuPDF
 from PIL import Image
-from openai import OpenAI
+from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
@@ -30,16 +30,16 @@ from vision_prompts import (
     validate_extraction,
 )
 
-client = OpenAI(
+async_client = AsyncOpenAI(
     api_key=os.getenv("OPENAI_API_KEY"),
-    timeout=120.0,  # 2-minute timeout per API call to prevent hangs
+    timeout=120.0,
 )
 
 MAX_PAGES = 20
 IMAGE_DPI = 120  # Lowered from 150 to reduce image size and API latency
 MAX_IMAGE_SIZE_MB = 3.0  # Lowered from 4MB to speed up API calls
 VISION_MODEL = "gpt-4o"
-MAX_EXTRACTION_PAGES = 9  # Analyze up to 9 pages (reduced from 10 to avoid hang on last page)
+MAX_EXTRACTION_PAGES = 10  # Analyze up to 10 pages for measurements
 
 
 def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
@@ -85,9 +85,9 @@ def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str
 CALL_TIMEOUT_SECONDS = 30  # Hard timeout per GPT-4o API call (reduced from 90)
 
 
-def _raw_vision_call(image_base64: str, prompt: str, detail: str) -> str:
-    """Internal: make the actual OpenAI API call (runs in executor thread)."""
-    response = client.chat.completions.create(
+async def _async_vision_call(image_base64: str, prompt: str, detail: str) -> str:
+    """Internal: make the actual OpenAI API call using async client."""
+    response = await async_client.chat.completions.create(
         model=VISION_MODEL,
         messages=[{
             "role": "user",
@@ -108,40 +108,32 @@ def _raw_vision_call(image_base64: str, prompt: str, detail: str) -> str:
 def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
     """Send an image to GPT-4o vision and return the response text.
 
-    Uses a raw daemon thread with join(timeout) for a hard timeout.
-    Previous approaches using concurrent.futures.ThreadPoolExecutor failed
-    because executor.shutdown() blocks even with wait=False in some cases.
-    A raw daemon thread with join(timeout) has NO cleanup that can block.
+    Uses asyncio with wait_for() for a HARD timeout that actually cancels
+    the HTTP request. Previous approaches (threading, concurrent.futures)
+    failed because Python threads cannot be interrupted - they just get
+    abandoned while still holding connections. asyncio.wait_for() cancels
+    the coroutine which closes the underlying HTTP connection.
 
     Args:
         detail: "high" for measurement extraction (needs precision),
                 "low" for page classification (just needs to see layout).
     """
-    result_holder = {"value": None, "error": None}
+    async def _run_with_timeout():
+        return await asyncio.wait_for(
+            _async_vision_call(image_base64, prompt, detail),
+            timeout=CALL_TIMEOUT_SECONDS,
+        )
 
-    def _run():
-        try:
-            result_holder["value"] = _raw_vision_call(image_base64, prompt, detail)
-        except Exception as e:
-            result_holder["error"] = e
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    thread.join(timeout=CALL_TIMEOUT_SECONDS)
-
-    if thread.is_alive():
-        # Thread is still running (hung API call). Since it's a daemon thread,
-        # it won't prevent process exit. We just abandon it and move on.
-        print(f"[Vision] HARD TIMEOUT: GPT-4o call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
+    # Create a new event loop for each call (we're in a sync context)
+    loop = asyncio.new_event_loop()
+    try:
+        result = loop.run_until_complete(_run_with_timeout())
+        return result
+    except asyncio.TimeoutError:
+        print(f"[Vision] HARD TIMEOUT: GPT-4o async call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
         raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
-
-    if result_holder["error"]:
-        raise result_holder["error"]
-
-    if result_holder["value"] is None:
-        raise RuntimeError("Vision API call returned None")
-
-    return result_holder["value"]
+    finally:
+        loop.close()
 
 
 def classify_page(image_base64: str) -> dict:
