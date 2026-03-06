@@ -371,6 +371,12 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             "error_message": error_msg, "progress_message": progress_msg}
 
 
+@router.get("/vision-version")
+def vision_version():
+    """Returns the deployed code version for verification."""
+    return {"version": "v6-daemon-thread-timeout", "commit": "23da199"}
+
+
 @router.get("/vision-health")
 def vision_health_check(db: Session = Depends(get_db), current_user: dict = Depends(get_current_user)):
     """Diagnostic endpoint to check if the vision analysis pipeline is configured correctly."""
