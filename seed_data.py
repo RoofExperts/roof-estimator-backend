@@ -146,17 +146,17 @@ def seed_material_templates(db: Session):
 
     t("TPO", "pipe_flashing", "Waterblock Sealant",         "sealant",     "each", 0.5, 0.0, sort_order=10)
     t("TPO", "pipe_flashing", "Pipe Boot Flashing",         "flashing",    "each", 1.0, 0.0, sort_order=20)
-    t("TPO", "pipe_flashing", "All Purpose Sealant",        "sealant",     "each", 0.5, 0.0, sort_order=30)
+    t("TPO", "pipe_flashing", "Polyurethane Sealant",        "sealant",     "gallon", 0.04, 0.0, sort_order=30)
     t("TPO", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     t("EPDM", "pipe_flashing", "Waterblock Sealant",        "sealant",    "each", 0.5, 0.0, sort_order=10)
     t("EPDM", "pipe_flashing", "Pipe Boot Flashing",        "flashing",   "each", 1.0, 0.0, sort_order=20)
-    t("EPDM", "pipe_flashing", "All Purpose Sealant",       "sealant",    "each", 0.5, 0.0, sort_order=30)
+    t("EPDM", "pipe_flashing", "Polyurethane Sealant",       "sealant",    "gallon", 0.04, 0.0, sort_order=30)
     t("EPDM", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     t("PVC", "pipe_flashing", "Waterblock Sealant",          "sealant",   "each", 0.5, 0.0, sort_order=10)
     t("PVC", "pipe_flashing", "Pipe Boot Flashing",          "flashing",  "each", 1.0, 0.0, sort_order=20)
-    t("PVC", "pipe_flashing", "All Purpose Sealant",         "sealant",   "each", 0.5, 0.0, sort_order=30)
+    t("PVC", "pipe_flashing", "Polyurethane Sealant",         "sealant",   "gallon", 0.04, 0.0, sort_order=30)
     t("PVC", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -411,8 +411,6 @@ def seed_cost_database(db: Session):
     # ── Sealants ──
     c("Waterblock Sealant", "Carlisle", "sealant", "each", 12.50, 3.00,
       "Tube", 1, "Waterblock Sealant 10.3oz Tube")
-    c("All Purpose Sealant", "Carlisle", "sealant", "each", 8.50, 2.00,
-      "Tube", 1, "All Purpose Sealant 10.3oz Tube")
     c("Polyurethane Sealant", "Tremco", "sealant", "gallon", 35.00, 8.00,
       "Pail", 1.5, "Polyurethane Sealant 1.5-Gal")
     c("Pourable Sealer", "Carlisle", "sealant", "each", 18.00, 5.00,
@@ -561,7 +559,6 @@ def update_global_purchase_units(db: Session):
         ("pvc bonding adhesive", "gallon"): ("Pail", 5, "PVC Bonding Adhesive 5-Gal Pail"),
         # Sealants
         ("waterblock sealant", "each"): ("Tube", 1, "Waterblock Sealant 10.3oz Tube"),
-        ("all purpose sealant", "each"): ("Tube", 1, "All Purpose Sealant 10.3oz Tube"),
         ("polyurethane sealant", "gallon"): ("Pail", 1.5, "Polyurethane Sealant 1.5-Gal"),
         ("pourable sealer", "each"): ("Tube", 1, "Pourable Sealer 28oz Tube"),
         # Primers
@@ -786,6 +783,42 @@ def migrate_fix_insulation_plates_packaging(db: Session):
         print("[migrate] Insulation Plates packaging already correct. Skipping.")
 
 
+def migrate_consolidate_sealants(db: Session):
+    """Consolidate 'All Purpose Sealant' → 'Polyurethane Sealant' (same product)."""
+    # Update material templates
+    updated_templates = db.query(MaterialTemplate).filter(
+        MaterialTemplate.material_name == "All Purpose Sealant"
+    ).update({
+        "material_name": "Polyurethane Sealant",
+        "unit": "gallon",
+        "coverage_rate": 0.04,  # ~0.5 tubes ≈ 0.04 gal per penetration
+    }, synchronize_session=False)
+
+    # Update condition materials
+    from conditions_models import ConditionMaterial
+    updated_cond_mats = db.query(ConditionMaterial).filter(
+        ConditionMaterial.material_name == "All Purpose Sealant"
+    ).update({
+        "material_name": "Polyurethane Sealant",
+        "unit": "gallon",
+        "coverage_rate": 0.04,
+    }, synchronize_session=False)
+
+    # Remove duplicate cost database entry
+    from conditions_models import CostDatabaseItem
+    deleted_cost = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == "All Purpose Sealant"
+    ).delete(synchronize_session=False)
+
+    if updated_templates or updated_cond_mats or deleted_cost:
+        db.commit()
+        print(f"[migrate] Consolidated All Purpose Sealant → Polyurethane Sealant: "
+              f"{updated_templates} templates, {updated_cond_mats} condition materials, "
+              f"{deleted_cost} cost items removed")
+    else:
+        print("[migrate] Sealants already consolidated. Skipping.")
+
+
 def seed_database(db: Session):
     """Run all seed functions."""
     print("Starting database seed...")
@@ -796,5 +829,6 @@ def seed_database(db: Session):
     # Run migrations
     migrate_consolidate_perimeter_bar(db)
     migrate_fix_insulation_plates_packaging(db)
+    migrate_consolidate_sealants(db)
     db.commit()
     print("Database seeding complete.")
