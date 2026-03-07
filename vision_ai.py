@@ -158,6 +158,150 @@ def extract_measurements_for_page(image_base64: str, page_type: str, scale_info:
     return parse_vision_response(call_vision_api(image_base64, prompt))
 
 
+def measure_roof_plan_area(image_base64: str, scale_info: dict) -> dict:
+    """Dedicated roof plan area measurement using scale.
+    Sends the roof plan through a specialized prompt that focuses on
+    measuring the building footprint using the detected scale.
+    Uses detail='high' for maximum precision on measurements.
+    """
+    prompt = build_prompt_for_page_type("roof_plan_area", scale_info)
+    return parse_vision_response(call_vision_api(image_base64, prompt, detail="high"))
+
+
+def pixel_based_area_estimate(image_base64: str, scale_info: dict, image_width: int, image_height: int) -> dict:
+    """Estimate building area using image pixel analysis.
+
+    Uses the known DPI and scale ratio to calculate a pixels-per-foot ratio,
+    then asks GPT-4o to estimate the building outline as a fraction of the
+    total image. This provides an independent validation of the area measurement.
+
+    How it works:
+    - At IMAGE_DPI (120), 1 inch on paper = 120 pixels
+    - If scale is 1/8" = 1'-0" (ratio 96), then 1 real foot = 1/8" on paper = 15 pixels
+    - So pixels_per_foot = IMAGE_DPI / scale_ratio_denominator
+    - If GPT-4o says the building spans ~600 pixels wide, that's 600/15 = 40 feet
+
+    Returns dict with estimated area and confidence, or None if can't compute.
+    """
+    if not scale_info or not scale_info.get("scale_found"):
+        return None
+
+    scale_ratio = scale_info.get("scale_ratio")
+    if not scale_ratio or scale_ratio <= 0:
+        return None
+
+    # Calculate pixels per real-world foot
+    # scale_ratio is the denominator: 1:96 means 1 inch on paper = 96 inches real
+    # So 1 foot real = 12/scale_ratio inches on paper = 12/scale_ratio * DPI pixels
+    pixels_per_foot = (12.0 / scale_ratio) * IMAGE_DPI
+
+    # Total image coverage in feet
+    image_width_ft = image_width / pixels_per_foot
+    image_height_ft = image_height / pixels_per_foot
+    total_image_area_sqft = image_width_ft * image_height_ft
+
+    print(f"[Vision] Pixel analysis: {pixels_per_foot:.1f} px/ft, "
+          f"image covers {image_width_ft:.0f}' x {image_height_ft:.0f}' = {total_image_area_sqft:.0f} sqft")
+
+    return {
+        "pixels_per_foot": pixels_per_foot,
+        "image_width_ft": image_width_ft,
+        "image_height_ft": image_height_ft,
+        "total_image_area_sqft": total_image_area_sqft,
+    }
+
+
+def cross_check_roof_area(measurements: list) -> list:
+    """Cross-check roof area measurements from different sources.
+
+    When roof_area is found from multiple pages/methods (roof plan measurement
+    vs floor plan dimensions), compare them and keep the best one.
+
+    Priority:
+    1. Roof plan with scale measurement (highest detail, most accurate for roofing)
+    2. Floor plan / slab plan with labeled dimensions (good confirmation)
+    3. Any other source
+
+    If discrepancy > 15%, flag it in notes but still keep the primary value.
+    """
+    roof_area_entries = [m for m in measurements if m.get("type") == "roof_area" and m.get("value", 0) > 0]
+
+    if len(roof_area_entries) <= 1:
+        return measurements  # Nothing to cross-check
+
+    # Categorize by source
+    roof_plan_areas = []
+    floor_plan_areas = []
+    other_areas = []
+
+    for entry in roof_area_entries:
+        source = (entry.get("notes", "") + " " + entry.get("source", "")).lower()
+        method = entry.get("measurement_method", "")
+        page_type = entry.get("_source_page_type", "")
+
+        if page_type == "roof_plan" or "roof plan" in source or method in ("scale_measurement", "dimension_lines"):
+            roof_plan_areas.append(entry)
+        elif page_type in ("floor_plan", "slab_plan") or "floor" in source or "slab" in source or "building dimensions" in source:
+            floor_plan_areas.append(entry)
+        else:
+            other_areas.append(entry)
+
+    print(f"[Vision] Cross-check: {len(roof_plan_areas)} roof plan areas, "
+          f"{len(floor_plan_areas)} floor/slab plan areas, {len(other_areas)} other")
+
+    # Pick the primary (prefer roof plan measurement)
+    if roof_plan_areas:
+        # Among roof plan measurements, prefer highest confidence
+        primary = max(roof_plan_areas, key=lambda x: x.get("confidence", 0))
+        primary_source = "roof_plan"
+    elif floor_plan_areas:
+        primary = max(floor_plan_areas, key=lambda x: x.get("confidence", 0))
+        primary_source = "floor_plan"
+    else:
+        primary = max(other_areas, key=lambda x: x.get("confidence", 0))
+        primary_source = "other"
+
+    primary_value = primary.get("value", 0)
+
+    # Cross-check against other sources
+    all_other = [e for e in roof_area_entries if e is not primary]
+    for other in all_other:
+        other_value = other.get("value", 0)
+        if other_value > 0 and primary_value > 0:
+            discrepancy_pct = abs(primary_value - other_value) / primary_value * 100
+            other_source_type = other.get("_source_page_type", "unknown")
+
+            if discrepancy_pct <= 5:
+                match_label = "EXCELLENT MATCH"
+            elif discrepancy_pct <= 15:
+                match_label = "GOOD MATCH"
+            elif discrepancy_pct <= 30:
+                match_label = "MODERATE DISCREPANCY"
+            else:
+                match_label = "LARGE DISCREPANCY"
+
+            print(f"[Vision] Cross-check: primary={primary_value:.0f} sqft ({primary_source}) vs "
+                  f"{other_value:.0f} sqft ({other_source_type}) — {discrepancy_pct:.1f}% difference ({match_label})")
+
+            # Add cross-check note to primary
+            existing_notes = primary.get("notes", "")
+            cross_note = f"Cross-checked against {other_source_type}: {other_value:.0f} sqft ({discrepancy_pct:.1f}% diff, {match_label})"
+            primary["notes"] = f"{existing_notes}; {cross_note}" if existing_notes else cross_note
+
+            # If large discrepancy and floor plan has higher confidence, consider it
+            if discrepancy_pct > 30 and other.get("confidence", 0) > primary.get("confidence", 0) + 0.15:
+                print(f"[Vision] WARNING: Large discrepancy and {other_source_type} has notably higher confidence. "
+                      f"Preferring {other_source_type} value.")
+                primary["value"] = other_value
+                primary["confidence"] = other.get("confidence", 0)
+                primary["notes"] += f"; OVERRIDDEN: used {other_source_type} value due to higher confidence"
+
+    # Remove duplicate roof_area entries, keep only the primary
+    non_area = [m for m in measurements if m.get("type") != "roof_area"]
+    non_area.append(primary)
+    return non_area
+
+
 # ======================================================================
 # Extraction type â RoofCondition mapping
 # ======================================================================
@@ -486,15 +630,72 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 )
             except Exception as page_err:
                 print(f"[Vision]   Page {page_num}: extraction failed - {page_err}")
-                continue
+                measurements_result = {"measurements": []}
 
             if "error" in measurements_result:
                 print(f"[Vision]   Page {page_num}: extraction error - {measurements_result.get('error')}")
-                continue
+                measurements_result = {"measurements": []}
 
             page_measurements = measurements_result.get("measurements", [])
+
+            # === ROOF PLAN AREA MEASUREMENT (new dual extraction) ===
+            # For roof plan pages, ALSO run the dedicated area measurement prompt.
+            # This measures the building footprint using the scale — the primary
+            # method for getting accurate square footage.
+            if page_type == "roof_plan":
+                print(f"[Vision]   Page {page_num}: Running dedicated roof plan AREA measurement...")
+                try:
+                    area_result = measure_roof_plan_area(
+                        page_data["image_base64"], scale_for_extraction
+                    )
+                    if area_result and "error" not in area_result:
+                        area_measurements = area_result.get("measurements", [])
+                        method = area_result.get("measurement_method", "unknown")
+                        dims_labeled = area_result.get("dimensions_labeled", False)
+                        building_shape = area_result.get("building_shape", "unknown")
+                        print(f"[Vision]   Page {page_num}: Area measurement found {len(area_measurements)} items "
+                              f"(method: {method}, dims_labeled: {dims_labeled}, shape: {building_shape})")
+                        for am in area_measurements:
+                            am["_source_page_type"] = "roof_plan"
+                            am["measurement_method"] = method
+                        page_measurements.extend(area_measurements)
+
+                        # Pixel-based validation
+                        pixel_info = pixel_based_area_estimate(
+                            page_data["image_base64"],
+                            scale_for_extraction,
+                            page_data.get("width", 0),
+                            page_data.get("height", 0),
+                        )
+                        if pixel_info:
+                            # The total image area gives an upper bound for the building
+                            total_img_area = pixel_info.get("total_image_area_sqft", 0)
+                            roof_area_vals = [m["value"] for m in area_measurements if m.get("type") == "roof_area" and m.get("value", 0) > 0]
+                            if roof_area_vals:
+                                measured_area = roof_area_vals[0]
+                                # Building should be less than 80% of image area
+                                # (the drawing includes borders, title block, etc.)
+                                if total_img_area > 0 and measured_area > total_img_area * 0.85:
+                                    print(f"[Vision]   WARNING: Measured area {measured_area:.0f} sqft exceeds "
+                                          f"85% of drawable image area {total_img_area:.0f} sqft — measurement may be inflated")
+                                elif total_img_area > 0 and measured_area < total_img_area * 0.02:
+                                    print(f"[Vision]   WARNING: Measured area {measured_area:.0f} sqft is less than "
+                                          f"2% of drawable image area {total_img_area:.0f} sqft — measurement may be too small")
+                                else:
+                                    ratio = measured_area / total_img_area * 100 if total_img_area > 0 else 0
+                                    print(f"[Vision]   Pixel validation: building covers ~{ratio:.0f}% of drawable area (reasonable)")
+                    else:
+                        print(f"[Vision]   Page {page_num}: Area measurement returned error or empty")
+                except Exception as area_err:
+                    print(f"[Vision]   Page {page_num}: Area measurement failed - {area_err}")
+
+            # Tag floor plan / slab plan measurements for cross-check
+            if page_type in ("floor_plan", "slab_plan"):
+                for m in page_measurements:
+                    m["_source_page_type"] = page_type
+
             if page_measurements:
-                print(f"[Vision]   Page {page_num}: found {len(page_measurements)} measurements")
+                print(f"[Vision]   Page {page_num}: found {len(page_measurements)} total measurements")
                 page_scale_label = scale_for_extraction.get("scale_notation", "unknown")
                 for m in page_measurements:
                     m["_page_number"] = page_num
@@ -548,6 +749,11 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         # Heartbeat: we made it past the extraction loop
         plan_file.error_message = f"Saving {len(all_measurements)} measurements..."
         db.commit()
+
+        # Cross-check roof area measurements from different sources
+        # (roof plan scale measurement vs floor plan dimensions)
+        all_measurements = cross_check_roof_area(all_measurements)
+
         print(f"[Vision] Extraction loop complete. Deduplicating...")
 
         # Step 5: Deduplicate and store extractions

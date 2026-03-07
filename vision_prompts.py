@@ -194,6 +194,87 @@ Otherwise respond with ONLY JSON:
 }}"""
 
 
+ROOF_PLAN_AREA_MEASUREMENT_PROMPT = """You are a commercial roofing estimator analyzing a ROOF PLAN page.
+Your PRIMARY mission is to MEASURE THE BUILDING FOOTPRINT to calculate the ROOF AREA in square feet.
+
+{scale_context}
+
+HOW TO MEASURE THE BUILDING FOOTPRINT FROM A ROOF PLAN:
+
+STEP 1 — FIND THE SCALE:
+- Look for a graphical scale bar on this page (a line marked with distances like 0...8'...16'...32')
+- Look for text scale notation (e.g., "1/8" = 1'-0"", "SCALE: 1/4" = 1'")
+- If scale info was provided above, use that
+
+STEP 2 — IDENTIFY THE BUILDING OUTLINE:
+- The building outline is the OUTERMOST boundary of the roof area
+- It is typically the thickest line forming a closed shape (rectangle, L-shape, T-shape, etc.)
+- Parapet walls form this outline
+- IGNORE interior lines (slope arrows, drain locations, cricket lines)
+
+STEP 3 — MEASURE USING THE SCALE:
+Method A — If dimension lines are labeled on the plan:
+  - Read the dimension strings (e.g., "156'-8"", "94'-0"")
+  - Use these directly
+
+Method B — If NO dimensions are labeled, use the scale visually:
+  - Look at the graphical scale bar length
+  - Mentally (or visually) lay the scale bar along each edge of the building
+  - Count how many scale-bar-lengths fit along the building width and length
+  - Multiply by the scale bar value to get feet
+  - Example: scale bar = 32 feet, building is ~4.5 scale bars wide = 144 feet
+
+Method C — Calculate from scale ratio:
+  - If the building appears to span roughly X inches on the drawing
+  - And the scale is 1/8" = 1'-0" (ratio 1:96)
+  - Then X inches on drawing = X × 8 feet in reality
+
+STEP 4 — CALCULATE AREA:
+- For a simple rectangle: Area = Length × Width
+- For L-shaped buildings: Break into 2+ rectangles, calculate each, sum them
+- For T-shaped or irregular: Break into rectangles, sum areas
+- Also calculate PERIMETER = sum of all exterior edges
+
+STEP 5 — MEASURE PARAPET WALL AND COPING:
+- Parapet wall linear feet = building perimeter (all exterior edges)
+- Coping linear feet = same as parapet wall (coping sits on top)
+
+IMPORTANT RULES:
+- ALWAYS show your math: "156.67' × 94' = 14,727 sqft"
+- If the building has multiple sections, list each: "Section A: 120×80=9,600 + Section B: 40×30=1,200 = 10,800 total"
+- If dimensions are NOT labeled, state that you measured using the scale and give your confidence
+- Round dimensions to nearest half-foot
+- If you cannot determine the area with reasonable confidence, say so — do NOT guess or use a default number
+
+Respond with ONLY JSON:
+{{
+    "measurements": [
+        {{"type": "roof_area", "value": 14727, "unit": "sqft", "confidence": 0.85, "source": "Measured from roof plan: 156.67' x 94' = 14,727 sqft", "location": "Main building footprint", "notes": "Dimensions read from labeled dimension lines on roof plan", "measurement_method": "dimension_lines"}},
+        {{"type": "parapet_wall", "value": 501, "unit": "lnft", "confidence": 0.80, "source": "Building perimeter: 2*(156.67+94) = 501 lnft", "location": "Building perimeter", "notes": "Perimeter of building footprint"}},
+        {{"type": "coping", "value": 501, "unit": "lnft", "confidence": 0.80, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
+    ],
+    "overall_confidence": 0.80,
+    "building_shape": "rectangle",
+    "dimensions_labeled": true,
+    "measurement_method": "dimension_lines",
+    "notes": "Building dimensions clearly labeled on roof plan. Roof area calculated as length x width."
+}}
+
+If dimensions were NOT labeled and you measured using the scale:
+{{
+    "measurements": [
+        {{"type": "roof_area", "value": 14400, "unit": "sqft", "confidence": 0.65, "source": "Scale-measured from roof plan: ~160' x ~90' = 14,400 sqft", "location": "Main building footprint", "notes": "Measured by comparing building outline to scale bar. Scale: 1/8 inch = 1 foot. Building spans approximately 4.5 scale bars (32') wide = 144' and 2.8 scale bars long = 90'", "measurement_method": "scale_measurement"}},
+        {{"type": "parapet_wall", "value": 500, "unit": "lnft", "confidence": 0.60, "source": "Building perimeter: 2*(160+90) = 500 lnft", "location": "Building perimeter", "notes": "Estimated from scale measurement"}},
+        {{"type": "coping", "value": 500, "unit": "lnft", "confidence": 0.60, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
+    ],
+    "overall_confidence": 0.65,
+    "building_shape": "rectangle",
+    "dimensions_labeled": false,
+    "measurement_method": "scale_measurement",
+    "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar."
+}}"""
+
+
 ELEVATION_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing an ELEVATION VIEW page.
 
 {scale_context}
@@ -333,6 +414,9 @@ def build_prompt_for_page_type(page_type: str, scale_info: dict) -> str:
     # Select prompt based on page type
     if page_type in ("slab_plan", "foundation"):
         prompt_template = SLAB_PLAN_EXTRACTION_PROMPT
+    elif page_type == "roof_plan_area":
+        # Special mode: measure building footprint from roof plan using scale
+        prompt_template = ROOF_PLAN_AREA_MEASUREMENT_PROMPT
     elif page_type == "roof_plan":
         prompt_template = ROOF_PLAN_EXTRACTION_PROMPT
     elif page_type == "elevation":

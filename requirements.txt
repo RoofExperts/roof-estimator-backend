@@ -16,3 +16,4 @@ pydantic
 
 Pillow
 reportlab
+opencv-python-headless
