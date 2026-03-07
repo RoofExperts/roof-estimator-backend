@@ -146,17 +146,17 @@ def seed_material_templates(db: Session):
 
     t("TPO", "pipe_flashing", "Waterblock Sealant",         "sealant",     "each", 0.5, 0.0, sort_order=10)
     t("TPO", "pipe_flashing", "Pipe Boot Flashing",         "flashing",    "each", 1.0, 0.0, sort_order=20)
-    t("TPO", "pipe_flashing", "Polyurethane Sealant",        "sealant",     "gallon", 0.04, 0.0, sort_order=30)
+    t("TPO", "pipe_flashing", "Polyurethane Sealant",        "sealant",     "each", 0.5, 0.0, sort_order=30)
     t("TPO", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     t("EPDM", "pipe_flashing", "Waterblock Sealant",        "sealant",    "each", 0.5, 0.0, sort_order=10)
     t("EPDM", "pipe_flashing", "Pipe Boot Flashing",        "flashing",   "each", 1.0, 0.0, sort_order=20)
-    t("EPDM", "pipe_flashing", "Polyurethane Sealant",       "sealant",    "gallon", 0.04, 0.0, sort_order=30)
+    t("EPDM", "pipe_flashing", "Polyurethane Sealant",       "sealant",    "each", 0.5, 0.0, sort_order=30)
     t("EPDM", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     t("PVC", "pipe_flashing", "Waterblock Sealant",          "sealant",   "each", 0.5, 0.0, sort_order=10)
     t("PVC", "pipe_flashing", "Pipe Boot Flashing",          "flashing",  "each", 1.0, 0.0, sort_order=20)
-    t("PVC", "pipe_flashing", "Polyurethane Sealant",         "sealant",   "gallon", 0.04, 0.0, sort_order=30)
+    t("PVC", "pipe_flashing", "Polyurethane Sealant",         "sealant",   "each", 0.5, 0.0, sort_order=30)
     t("PVC", "pipe_flashing", "Membrane Screws & Seam Plates", "fastener", "each", 4.0, 0.0, sort_order=40)
 
     # ════════════════════════════════════════════════════════════════════════
@@ -191,7 +191,7 @@ def seed_material_templates(db: Session):
 
     t("common", "coping", "Coping Metal (24ga)",             "flashing",   "lnft", 1.0, 0.05, sort_order=10)
     t("common", "coping", "Coping Fasteners",                "fastener",   "each", 3.0, 0.10, sort_order=20)
-    t("common", "coping", "Polyurethane Sealant",            "sealant",    "gallon", 0.02, 0.10, sort_order=30)
+    t("common", "coping", "Polyurethane Sealant",            "sealant",    "each", 0.25, 0.10, sort_order=30)
 
     # ════════════════════════════════════════════════════════════════════════
     # PERIMETER — membrane strip + fasteners + bar
@@ -218,7 +218,7 @@ def seed_material_templates(db: Session):
     t("PVC", "corner", "PVC Membrane",                       "membrane",   "sqft", 2.0, 0.15, sort_order=10)
     t("common", "corner", "Corner Flashing (Aluminum)",      "flashing",   "lnft", 4.0, 0.05, sort_order=20)
     t("common", "corner", "Corner Fasteners",                "fastener",   "each", 4.0, 0.10, sort_order=30)
-    t("common", "corner", "Polyurethane Sealant",            "sealant",    "gallon", 0.05, 0.10, sort_order=40)
+    t("common", "corner", "Polyurethane Sealant",            "sealant",    "each", 0.625, 0.10, sort_order=40)
 
     # ════════════════════════════════════════════════════════════════════════
     # PENETRATION — generic (non-pipe, non-pitch-pan)
@@ -230,7 +230,7 @@ def seed_material_templates(db: Session):
     t("EPDM", "penetration", "EPDM Bonding Adhesive",       "adhesive",   "gallon", 0.05, 0.05, sort_order=20)
     t("PVC", "penetration", "PVC Membrane",                  "membrane",   "sqft", 6.0, 0.15, sort_order=10)
     t("PVC", "penetration", "PVC Bonding Adhesive",          "adhesive",   "gallon", 0.05, 0.05, sort_order=20)
-    t("common", "penetration", "Polyurethane Sealant",       "sealant",    "gallon", 0.10, 0.05, sort_order=30)
+    t("common", "penetration", "Polyurethane Sealant",       "sealant",    "each", 1.25, 0.05, sort_order=30)
 
     # ════════════════════════════════════════════════════════════════════════
     # EDGE DETAIL — membrane strip + metal + fasteners + sealant
@@ -242,7 +242,7 @@ def seed_material_templates(db: Session):
     t("common", "edge_detail", "Metal Edge Flashing (24ga)", "flashing",   "lnft", 1.0, 0.05, sort_order=20)
     t("common", "edge_detail", "Drip Edge (Aluminum)",       "flashing",   "lnft", 1.0, 0.05, sort_order=25)
     t("common", "edge_detail", "Edge Fasteners",             "fastener",   "each", 3.0, 0.10, sort_order=30)
-    t("common", "edge_detail", "Polyurethane Sealant",       "sealant",    "gallon", 0.02, 0.10, sort_order=40)
+    t("common", "edge_detail", "Polyurethane Sealant",       "sealant",    "each", 0.25, 0.10, sort_order=40)
 
     # ════════════════════════════════════════════════════════════════════════
     # TRANSITION — membrane + sealant + term bar + fasteners
@@ -251,7 +251,7 @@ def seed_material_templates(db: Session):
     t("TPO", "transition", "TPO Membrane",                   "membrane",   "lnft", 2.0, 0.15, sort_order=10)
     t("EPDM", "transition", "EPDM Membrane",                "membrane",   "lnft", 2.0, 0.15, sort_order=10)
     t("PVC", "transition", "PVC Membrane",                   "membrane",   "lnft", 2.0, 0.15, sort_order=10)
-    t("common", "transition", "Polyurethane Sealant",        "sealant",    "gallon", 0.03, 0.10, sort_order=20)
+    t("common", "transition", "Polyurethane Sealant",        "sealant",    "each", 0.375, 0.10, sort_order=20)
     t("common", "transition", "Termination Bar",             "accessory",  "lnft", 1.0, 0.05, sort_order=30)
     t("common", "transition", "Transition Fasteners",        "fastener",   "each", 2.0, 0.10, sort_order=40)
 
@@ -260,7 +260,7 @@ def seed_material_templates(db: Session):
     # ════════════════════════════════════════════════════════════════════════
 
     t("common", "expansion_joint", "Expansion Joint Cover",  "accessory",  "lnft", 1.0, 0.05, sort_order=10)
-    t("common", "expansion_joint", "Polyurethane Sealant",   "sealant",    "gallon", 0.03, 0.10, sort_order=20)
+    t("common", "expansion_joint", "Polyurethane Sealant",   "sealant",    "each", 0.375, 0.10, sort_order=20)
 
     # ════════════════════════════════════════════════════════════════════════
     # PARAPET — membrane + adhesive + coping
@@ -411,8 +411,8 @@ def seed_cost_database(db: Session):
     # ── Sealants ──
     c("Waterblock Sealant", "Carlisle", "sealant", "each", 12.50, 3.00,
       "Tube", 1, "Waterblock Sealant 10.3oz Tube")
-    c("Polyurethane Sealant", "Tremco", "sealant", "gallon", 35.00, 8.00,
-      "Pail", 1.5, "Polyurethane Sealant 1.5-Gal")
+    c("Polyurethane Sealant", "Tremco", "sealant", "each", 8.50, 2.00,
+      "Tube", 1, "Polyurethane Sealant 10.1oz Tube")
     c("Pourable Sealer", "Carlisle", "sealant", "each", 18.00, 5.00,
       "Tube", 1, "Pourable Sealer 28oz Tube")
 
@@ -559,7 +559,7 @@ def update_global_purchase_units(db: Session):
         ("pvc bonding adhesive", "gallon"): ("Pail", 5, "PVC Bonding Adhesive 5-Gal Pail"),
         # Sealants
         ("waterblock sealant", "each"): ("Tube", 1, "Waterblock Sealant 10.3oz Tube"),
-        ("polyurethane sealant", "gallon"): ("Pail", 1.5, "Polyurethane Sealant 1.5-Gal"),
+        ("polyurethane sealant", "each"): ("Tube", 1, "Polyurethane Sealant 10.1oz Tube"),
         ("pourable sealer", "each"): ("Tube", 1, "Pourable Sealer 28oz Tube"),
         # Primers
         ("tpo primer", "gallon"): ("Pail", 5, "TPO Primer 5-Gal Pail"),
@@ -784,15 +784,27 @@ def migrate_fix_insulation_plates_packaging(db: Session):
 
 
 def migrate_consolidate_sealants(db: Session):
-    """Consolidate 'All Purpose Sealant' → 'Polyurethane Sealant' (same product)."""
-    # Update material templates
+    """Consolidate 'All Purpose Sealant' → 'Polyurethane Sealant' (tubes, not gallons)."""
+    # Update material templates — rename + convert to tubes (each)
     updated_templates = db.query(MaterialTemplate).filter(
         MaterialTemplate.material_name == "All Purpose Sealant"
     ).update({
         "material_name": "Polyurethane Sealant",
-        "unit": "gallon",
-        "coverage_rate": 0.04,  # ~0.5 tubes ≈ 0.04 gal per penetration
+        "unit": "each",
+        "coverage_rate": 0.5,  # 0.5 tubes per pipe flashing
     }, synchronize_session=False)
+
+    # Also convert any existing Polyurethane Sealant templates still in gallons → each
+    updated_gallon = db.query(MaterialTemplate).filter(
+        MaterialTemplate.material_name == "Polyurethane Sealant",
+        MaterialTemplate.unit == "gallon"
+    ).all()
+    gallon_to_tube = {
+        0.02: 0.25, 0.03: 0.375, 0.04: 0.5, 0.05: 0.625, 0.10: 1.25,
+    }
+    for tmpl in updated_gallon:
+        tmpl.unit = "each"
+        tmpl.coverage_rate = gallon_to_tube.get(tmpl.coverage_rate, tmpl.coverage_rate * 12.5)
 
     # Update condition materials
     from conditions_models import ConditionMaterial
@@ -800,21 +812,45 @@ def migrate_consolidate_sealants(db: Session):
         ConditionMaterial.material_name == "All Purpose Sealant"
     ).update({
         "material_name": "Polyurethane Sealant",
-        "unit": "gallon",
-        "coverage_rate": 0.04,
+        "unit": "each",
+        "coverage_rate": 0.5,
     }, synchronize_session=False)
 
-    # Remove duplicate cost database entry
+    # Also convert existing Polyurethane Sealant condition materials from gallon → each
+    gallon_cond_mats = db.query(ConditionMaterial).filter(
+        ConditionMaterial.material_name == "Polyurethane Sealant",
+        ConditionMaterial.unit == "gallon"
+    ).all()
+    for cm in gallon_cond_mats:
+        cm.unit = "each"
+        cm.coverage_rate = gallon_to_tube.get(cm.coverage_rate, cm.coverage_rate * 12.5)
+
+    # Remove old All Purpose Sealant cost database entry
     from conditions_models import CostDatabaseItem
     deleted_cost = db.query(CostDatabaseItem).filter(
         CostDatabaseItem.material_name == "All Purpose Sealant"
     ).delete(synchronize_session=False)
 
-    if updated_templates or updated_cond_mats or deleted_cost:
+    # Update Polyurethane Sealant cost item from gallon/pail → each/tube
+    db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == "Polyurethane Sealant",
+        CostDatabaseItem.unit == "gallon"
+    ).update({
+        "unit": "each",
+        "unit_cost": 8.50,
+        "labor_cost_per_unit": 2.00,
+        "purchase_unit": "Tube",
+        "units_per_purchase": 1,
+        "product_name": "Polyurethane Sealant 10.1oz Tube",
+    }, synchronize_session=False)
+
+    total_changes = updated_templates + len(updated_gallon) + updated_cond_mats + len(gallon_cond_mats) + deleted_cost
+    if total_changes:
         db.commit()
-        print(f"[migrate] Consolidated All Purpose Sealant → Polyurethane Sealant: "
-              f"{updated_templates} templates, {updated_cond_mats} condition materials, "
-              f"{deleted_cost} cost items removed")
+        print(f"[migrate] Consolidated sealants → Polyurethane Sealant (tubes): "
+              f"{updated_templates} renamed, {len(updated_gallon)} gallon→tube templates, "
+              f"{updated_cond_mats + len(gallon_cond_mats)} condition materials, "
+              f"{deleted_cost} old cost items removed")
     else:
         print("[migrate] Sealants already consolidated. Skipping.")
 
