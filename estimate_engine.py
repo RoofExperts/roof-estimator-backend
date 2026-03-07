@@ -280,6 +280,15 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
                 # Aggregate into consolidated
                 key = f"{mat.material_name}|{mat.unit}"
                 if key not in consolidated:
+                    # Pull purchase unit conversion from cost item
+                    p_unit = None
+                    p_per = None
+                    p_name = None
+                    if cost_item:
+                        p_unit = getattr(cost_item, 'purchase_unit', None)
+                        p_per = getattr(cost_item, 'units_per_purchase', None)
+                        p_name = getattr(cost_item, 'product_name', None)
+
                     consolidated[key] = {
                         "material_name": mat.material_name,
                         "material_category": mat.material_category,
@@ -289,6 +298,9 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
                         "labor_cost": labor_cost,
                         "total_cost": 0,
                         "waste_pct": mat.waste_factor or 0,
+                        "purchase_unit": p_unit,
+                        "units_per_purchase": p_per,
+                        "product_name": p_name,
                     }
                 consolidated[key]["total_qty"] = round(consolidated[key]["total_qty"] + qty, 2)
                 consolidated[key]["total_cost"] = round(consolidated[key]["total_cost"] + extended, 2)
@@ -324,7 +336,21 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
 
         db.commit()
 
-        # Build consolidated list sorted by category
+        # Build consolidated list with purchase unit conversions
+        import math
+        for item in consolidated.values():
+            p_unit = item.get("purchase_unit")
+            p_per = item.get("units_per_purchase")
+            if p_unit and p_per and p_per > 0:
+                item["purchase_qty"] = math.ceil(item["total_qty"] / p_per)
+                # Recalculate extended cost based on purchase qty × units_per_purchase × unit_cost
+                item["purchase_cost"] = round(
+                    item["purchase_qty"] * p_per * (item["unit_cost"] + item["labor_cost"]), 2
+                )
+            else:
+                item["purchase_qty"] = math.ceil(item["total_qty"])
+                item["purchase_cost"] = item["total_cost"]
+
         consolidated_list = sorted(consolidated.values(), key=lambda x: (x["material_category"], x["material_name"]))
 
         # Calculate totals

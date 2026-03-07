@@ -235,9 +235,12 @@ class EstimateLineItem(Base):
 class CostDatabaseItem(Base):
     """
     The internal pricing database for all materials and labor.
-    
+
     Contains unit costs and optional labor costs per unit. Updated regularly
     to reflect market pricing. Can be toggled active/inactive.
+
+    Purchase unit fields enable takeoff-style conversion:
+    e.g., 13,000 SF of TPO → 14 Rolls (at 1,000 SF/Roll)
     """
     __tablename__ = "cost_database_items"
 
@@ -263,3 +266,11 @@ class CostDatabaseItem(Base):
                     comment="NULL + is_global=True = shared seed pricing")
     is_global = Column(Boolean, default=False, index=True,
                        comment="True = shared across all orgs (seed data)")
+
+    # Purchase unit conversion (SF → Rolls, EA → Boxes, etc.)
+    purchase_unit = Column(String, nullable=True,
+                           comment="How purchased: Roll, Box, Pail, Tube, Tank, Bundle, etc.")
+    units_per_purchase = Column(Float, nullable=True,
+                                comment="Base units per purchase unit (e.g., 1000 SF per Roll)")
+    product_name = Column(String, nullable=True,
+                          comment="Full product name for takeoff (e.g., 'TPO 60mil White 10x100')")

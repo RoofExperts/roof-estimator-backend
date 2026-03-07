@@ -143,6 +143,14 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "cost_database_items", "notes", "TEXT"):
         changes += 1
 
+    # ── cost_database_items: purchase unit conversion ──
+    if add_column_if_missing(engine, "cost_database_items", "purchase_unit", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "cost_database_items", "units_per_purchase", "FLOAT"):
+        changes += 1
+    if add_column_if_missing(engine, "cost_database_items", "product_name", "TEXT"):
+        changes += 1
+
     if changes:
         print(f"[migrations] Applied {changes} migration(s).")
     else:

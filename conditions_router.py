@@ -194,6 +194,9 @@ class CostDatabaseItemCreate(BaseModel):
     unit_cost: float
     labor_cost_per_unit: Optional[float] = None
     is_active: bool = True
+    purchase_unit: Optional[str] = None
+    units_per_purchase: Optional[float] = None
+    product_name: Optional[str] = None
 
 
 class CostDatabaseItemUpdate(BaseModel):
@@ -201,6 +204,9 @@ class CostDatabaseItemUpdate(BaseModel):
     unit_cost: Optional[float] = None
     labor_cost_per_unit: Optional[float] = None
     is_active: Optional[bool] = None
+    purchase_unit: Optional[str] = None
+    units_per_purchase: Optional[float] = None
+    product_name: Optional[str] = None
 
 
 class CostDatabaseItemResponse(BaseModel):
@@ -214,6 +220,9 @@ class CostDatabaseItemResponse(BaseModel):
     labor_cost_per_unit: Optional[float]
     last_updated: datetime.datetime
     is_active: bool
+    purchase_unit: Optional[str] = None
+    units_per_purchase: Optional[float] = None
+    product_name: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -755,7 +764,10 @@ def create_cost_item(
         unit_cost=item.unit_cost,
         labor_cost_per_unit=item.labor_cost_per_unit,
         is_active=item.is_active,
-        org_id=current_user["org_id"]
+        org_id=current_user["org_id"],
+        purchase_unit=item.purchase_unit,
+        units_per_purchase=item.units_per_purchase,
+        product_name=item.product_name,
     )
     db.add(db_item)
     db.commit()
