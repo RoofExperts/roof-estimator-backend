@@ -44,21 +44,31 @@ def _find_cost_item(material_name: str, unit: str, org_id: int, db: Session) -> 
         CostDatabaseItem.org_id == org_id
     ]
 
+    # Helper: pick the best item from a list (prefer ones with purchase_unit)
+    def _pick_best(items):
+        if not items:
+            return None
+        if len(items) == 1:
+            return items[0]
+        # Prefer items that have purchase_unit configured
+        with_pu = [i for i in items if i.purchase_unit]
+        return with_pu[0] if with_pu else items[0]
+
     # 1. Exact match on org items
-    item = db.query(CostDatabaseItem).filter(
+    items = db.query(CostDatabaseItem).filter(
         CostDatabaseItem.material_name == material_name,
         *org_filter
-    ).first()
-    if item:
-        return item
+    ).all()
+    if items:
+        return _pick_best(items)
 
     # 2. Case-insensitive exact match on org items
-    item = db.query(CostDatabaseItem).filter(
+    items = db.query(CostDatabaseItem).filter(
         func.lower(CostDatabaseItem.material_name) == material_name.lower(),
         *org_filter
-    ).first()
-    if item:
-        return item
+    ).all()
+    if items:
+        return _pick_best(items)
 
     # 3. Keyword-based fuzzy match on org items
     keywords = [w.lower() for w in material_name.split() if len(w) > 2]
