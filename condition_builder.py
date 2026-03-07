@@ -201,27 +201,34 @@ def _populate_materials_for_condition(
 
     templates = [t for t in templates if not _belongs_to_wrong_system(t)]
 
-    # De-duplicate: system-specific overrides common; org-specific overrides global
+    # Split into system-specific and common templates
+    system_templates = [t for t in templates if t.system_type == system_type]
+    common_templates = [t for t in templates if t.system_type == "common"]
+
+    # Use system-specific templates as the primary set.
+    # Only add common templates for categories NOT already covered by system-specific.
+    system_categories = {t.material_category for t in system_templates}
+
+    deduped = list(system_templates)
+    for tmpl in common_templates:
+        if tmpl.material_category not in system_categories:
+            deduped.append(tmpl)
+
+    # Final dedup by name+category: org-specific overrides global
     seen = {}
-    deduped = []
-    for tmpl in templates:
-        key = (tmpl.material_category, tmpl.sort_order)
+    final = []
+    for tmpl in deduped:
         name_key = (tmpl.material_name, tmpl.material_category)
         if name_key in seen:
-            # Keep org-specific over global
             existing = seen[name_key]
             if tmpl.org_id == org_id and existing.is_global:
-                deduped = [t for t in deduped if (t.material_name, t.material_category) != name_key]
-                deduped.append(tmpl)
-                seen[name_key] = tmpl
-            # Keep system-specific over common
-            elif tmpl.system_type == system_type and existing.system_type == "common":
-                deduped = [t for t in deduped if (t.material_name, t.material_category) != name_key]
-                deduped.append(tmpl)
+                final = [t for t in final if (t.material_name, t.material_category) != name_key]
+                final.append(tmpl)
                 seen[name_key] = tmpl
         else:
             seen[name_key] = tmpl
-            deduped.append(tmpl)
+            final.append(tmpl)
+    deduped = final
 
     added = 0
     for tmpl in deduped:
