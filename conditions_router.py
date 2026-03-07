@@ -912,6 +912,12 @@ def update_cost_item(
         db_item.labor_cost_per_unit = item.labor_cost_per_unit
     if item.is_active is not None:
         db_item.is_active = item.is_active
+    if item.purchase_unit is not None:
+        db_item.purchase_unit = item.purchase_unit
+    if item.units_per_purchase is not None:
+        db_item.units_per_purchase = item.units_per_purchase
+    if item.product_name is not None:
+        db_item.product_name = item.product_name
     db_item.last_updated = datetime.datetime.utcnow()
     db.commit()
     db.refresh(db_item)
