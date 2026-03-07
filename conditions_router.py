@@ -1555,6 +1555,145 @@ def delete_cost_item(
     return {"message": "Cost item deleted successfully"}
 
 
+@router.post("/cost-database/dedup")
+def dedup_cost_database(
+    dry_run: bool = Query(True, description="If true, only report duplicates without merging"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Find and auto-merge duplicate cost database items.
+
+    Duplicates are items with the same (material_name, material_category, unit, org_id)
+    — case-insensitive match on material_name.
+
+    For each duplicate group, keeps the "best" item (prefers: has pricing > has manufacturer
+    > most recently updated > lowest ID) and deactivates the rest. Updates any
+    ConditionMaterial references to point to the kept item.
+    """
+    from sqlalchemy import func
+
+    org_id = current_user["org_id"]
+
+    # Find all active items for this org (including globals)
+    items = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_active == True,
+        (CostDatabaseItem.org_id == org_id) | (CostDatabaseItem.is_global == True)
+    ).all()
+
+    # Group by (lower(name), category, unit)
+    groups = {}
+    for item in items:
+        key = (
+            (item.material_name or "").strip().lower(),
+            (item.material_category or "").strip().lower(),
+            (item.unit or "").strip().lower(),
+        )
+        groups.setdefault(key, []).append(item)
+
+    # Find groups with duplicates
+    dup_groups = {k: v for k, v in groups.items() if len(v) > 1}
+
+    if not dup_groups:
+        return {
+            "message": "No duplicates found",
+            "duplicate_groups": 0,
+            "total_duplicates": 0,
+            "items_removed": 0,
+            "references_updated": 0,
+            "details": [],
+        }
+
+    details = []
+    total_removed = 0
+    total_refs_updated = 0
+
+    for key, group in dup_groups.items():
+        # Score each item — higher = better to keep
+        def score(item):
+            s = 0
+            if item.unit_cost and item.unit_cost > 0:
+                s += 1000  # has pricing
+            if item.manufacturer:
+                s += 100  # has manufacturer
+            if item.product_name:
+                s += 50  # has product name
+            if item.org_id == org_id:
+                s += 500  # org-specific preferred over global
+            if item.last_updated:
+                s += 1  # tiebreaker
+            return s
+
+        sorted_group = sorted(group, key=lambda i: (-score(i), i.id))
+        keeper = sorted_group[0]
+        dupes = sorted_group[1:]
+
+        group_detail = {
+            "key": f"{key[0]} | {key[1]} | {key[2]}",
+            "kept": {
+                "id": keeper.id,
+                "material_name": keeper.material_name,
+                "manufacturer": keeper.manufacturer,
+                "unit_cost": keeper.unit_cost,
+                "is_global": keeper.is_global,
+            },
+            "removed": [],
+        }
+
+        if not dry_run:
+            for dupe in dupes:
+                # Update any ConditionMaterials pointing to the dupe
+                refs = db.query(ConditionMaterial).filter(
+                    ConditionMaterial.cost_database_item_id == dupe.id
+                ).all()
+                for ref in refs:
+                    ref.cost_database_item_id = keeper.id
+                total_refs_updated += len(refs)
+
+                # Deactivate the dupe
+                dupe.is_active = False
+                dupe.last_updated = datetime.datetime.utcnow()
+
+                group_detail["removed"].append({
+                    "id": dupe.id,
+                    "material_name": dupe.material_name,
+                    "manufacturer": dupe.manufacturer,
+                    "unit_cost": dupe.unit_cost,
+                    "is_global": dupe.is_global,
+                    "refs_relinked": len(refs),
+                })
+                total_removed += 1
+        else:
+            for dupe in dupes:
+                refs_count = db.query(ConditionMaterial).filter(
+                    ConditionMaterial.cost_database_item_id == dupe.id
+                ).count()
+                group_detail["removed"].append({
+                    "id": dupe.id,
+                    "material_name": dupe.material_name,
+                    "manufacturer": dupe.manufacturer,
+                    "unit_cost": dupe.unit_cost,
+                    "is_global": dupe.is_global,
+                    "refs_would_relink": refs_count,
+                })
+                total_removed += 1
+
+        details.append(group_detail)
+
+    if not dry_run:
+        db.commit()
+
+    return {
+        "message": f"{'Would remove' if dry_run else 'Removed'} {total_removed} duplicate items across {len(dup_groups)} groups",
+        "dry_run": dry_run,
+        "duplicate_groups": len(dup_groups),
+        "total_duplicates": total_removed,
+        "items_removed": total_removed if not dry_run else 0,
+        "references_updated": total_refs_updated,
+        "details": details,
+    }
+
+
 # ============================================================================
 # CONDITION PRESET ENDPOINTS (Company Admin Portal)
 # ============================================================================
