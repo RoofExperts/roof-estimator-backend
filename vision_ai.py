@@ -897,7 +897,23 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         created_condition_ids = auto_create_conditions(project_id, plan_file_id, db)
 
         plan_file.upload_status = "completed"
-        plan_file.error_message = None  # Clear any progress messages
+        # If 0 extractions, store diagnostic info so user can see what happened
+        if extraction_count == 0:
+            page_type_list = ", ".join(
+                f"p{pn}={pc.get('page_type','?')}" for pn, pc in page_classifications.items()
+            )
+            extracted_pages = [p["page_number"] for p in pages_to_extract]
+            diag = (
+                f"0 extractions found. "
+                f"Pages: {page_type_list}. "
+                f"Extraction attempted on pages: {extracted_pages}. "
+                f"Scale: {file_scale_info.get('scale_notation', 'none')}. "
+                f"Raw measurements before dedup: {len(all_measurements)}"
+            )
+            plan_file.error_message = diag
+            print(f"[Vision] DIAGNOSTIC: {diag}")
+        else:
+            plan_file.error_message = None  # Clear any progress messages
         db.commit()
 
         result = {

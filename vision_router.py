@@ -435,10 +435,68 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
             "error_message": error_msg, "progress_message": progress_msg}
 
 
+@router.get("/plan-files/{plan_file_id}/debug")
+def debug_plan_file(
+    plan_file_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Debug endpoint: shows all raw analysis data for a plan file."""
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    pages = db.query(PlanPageAnalysis).filter(
+        PlanPageAnalysis.plan_file_id == plan_file_id
+    ).order_by(PlanPageAnalysis.page_number).all()
+
+    extractions = db.query(VisionExtraction).filter(
+        VisionExtraction.plan_file_id == plan_file_id
+    ).all()
+
+    return {
+        "plan_file": {
+            "id": plan_file.id,
+            "file_name": plan_file.file_name,
+            "upload_status": plan_file.upload_status,
+            "page_count": plan_file.page_count,
+            "detected_scale": plan_file.detected_scale,
+            "scale_confidence": plan_file.scale_confidence,
+            "manual_scale": plan_file.manual_scale,
+            "manual_scale_ratio": plan_file.manual_scale_ratio,
+            "error_message": plan_file.error_message,
+            "s3_key": plan_file.s3_key,
+        },
+        "pages": [
+            {
+                "page_number": p.page_number,
+                "page_type": p.page_type,
+                "is_roof_relevant": p.is_roof_relevant,
+                "processing_status": p.processing_status,
+                "analysis_json": p.analysis_json,
+            }
+            for p in pages
+        ],
+        "extractions": [
+            {
+                "id": e.id,
+                "page_number": e.page_number,
+                "extraction_type": e.extraction_type,
+                "measurement_value": e.measurement_value,
+                "measurement_unit": e.measurement_unit,
+                "confidence_score": e.confidence_score,
+                "source_description": e.source_description,
+                "notes": e.notes,
+            }
+            for e in extractions
+        ],
+    }
+
+
 @router.get("/vision-version")
 def vision_version():
     """Returns the deployed code version for verification."""
-    return {"version": "v12-split-pdf-on-upload", "commit": "pending"}
+    return {"version": "v13-debug-diagnostics", "commit": "pending"}
 
 
 @router.get("/vision-health")
