@@ -205,6 +205,10 @@ class CostDatabaseItemCreate(BaseModel):
 
 class CostDatabaseItemUpdate(BaseModel):
     """Schema for updating a cost database item."""
+    material_name: Optional[str] = None
+    manufacturer: Optional[str] = None
+    material_category: Optional[str] = None
+    unit: Optional[str] = None
     unit_cost: Optional[float] = None
     labor_cost_per_unit: Optional[float] = None
     is_active: Optional[bool] = None
@@ -1019,6 +1023,14 @@ def update_cost_item(
     ).first()
     if not db_item:
         raise HTTPException(status_code=404, detail="Cost item not found")
+    if item.material_name is not None:
+        db_item.material_name = item.material_name
+    if item.manufacturer is not None:
+        db_item.manufacturer = item.manufacturer
+    if item.material_category is not None:
+        db_item.material_category = item.material_category
+    if item.unit is not None:
+        db_item.unit = item.unit
     if item.unit_cost is not None:
         db_item.unit_cost = item.unit_cost
     if item.labor_cost_per_unit is not None:
