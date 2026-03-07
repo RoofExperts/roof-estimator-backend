@@ -51,30 +51,40 @@ Respond with ONLY this JSON (no other text):
 
 
 SCALE_DETECTION_PROMPT = """You are analyzing an architectural drawing page.
-Find the scale of this drawing.
+Find the EXACT scale of this drawing. Getting the scale right is CRITICAL — a wrong scale
+will make all measurements wrong.
 
-Look for:
-1. A graphical scale bar (a line with measurement markings)
-2. Text stating the scale (e.g., 1/8" = 1'-0", SCALE: 1/4" = 1', 1:100)
-3. Title block information that includes scale
-4. Multiple scales if different areas have different scales
-5. ANY text that mentions feet, inches, or scale ratios
+LOOK CAREFULLY FOR:
+1. Text stating the scale — READ EVERY CHARACTER of the fraction carefully:
+   - "3/16" = 1'-0"" is DIFFERENT from "1/8" = 1'-0""
+   - "3/32" = 1'-0"" is DIFFERENT from "1/16" = 1'-0""
+   - Pay special attention to the NUMERATOR: is it 1, 3, or something else?
+2. A graphical scale bar (a line with measurement markings like 0...8'...16'...32')
+3. Title block information (usually bottom right corner)
+4. Scale text near the drawing title (e.g., "ROOF PLAN  SCALE: 3/16" = 1'-0"")
 
-Common architectural scales:
-- 1/8" = 1'-0" (1:96) - most common for roof plans
-- 3/16" = 1'-0" (1:64)
-- 1/4" = 1'-0" (1:48) - common for larger detail
-- 1/16" = 1'-0" (1:192) - used for large buildings
-- 3/32" = 1'-0" (1:128) - sometimes used for commercial
+COMMON ARCHITECTURAL SCALES (read fractions EXACTLY):
+- 1/16" = 1'-0" → ratio 1:192 (very small buildings look large on paper)
+- 3/32" = 1'-0" → ratio 1:128
+- 1/8"  = 1'-0" → ratio 1:96  (most common for large commercial)
+- 3/16" = 1'-0" → ratio 1:64  (common for medium commercial)
+- 1/4"  = 1'-0" → ratio 1:48  (common for smaller buildings/details)
+- 3/8"  = 1'-0" → ratio 1:32  (large detail views)
+- 1/2"  = 1'-0" → ratio 1:24  (detail views)
+
+CRITICAL: Read the fraction precisely. "3/16" has a 3 in the numerator.
+"1/8" has a 1 in the numerator. These are VERY different scales.
+If the numerator is 3, it is likely 3/16" or 3/32" or 3/8".
 
 Respond with ONLY this JSON (no other text):
 {
     "scale_found": true,
-    "scale_notation": "1/8 inch = 1 foot",
-    "scale_ratio": 96,
+    "scale_notation": "3/16 inch = 1 foot",
+    "scale_ratio": 64,
+    "scale_text_as_read": "3/16\" = 1'-0\"",
     "scale_location": "title block, bottom right",
     "confidence": 0.90,
-    "notes": "Scale clearly marked in title block"
+    "notes": "Scale clearly marked in title block as 3/16\" = 1'-0\""
 }"""
 
 
@@ -201,10 +211,17 @@ Your PRIMARY mission is to MEASURE THE BUILDING FOOTPRINT to calculate the ROOF 
 
 HOW TO MEASURE THE BUILDING FOOTPRINT FROM A ROOF PLAN:
 
-STEP 1 — FIND THE SCALE:
-- Look for a graphical scale bar on this page (a line marked with distances like 0...8'...16'...32')
-- Look for text scale notation (e.g., "1/8" = 1'-0"", "SCALE: 1/4" = 1'")
-- If scale info was provided above, use that
+STEP 1 — VERIFY THE SCALE (CRITICAL — do NOT skip this):
+- Look at this page and READ THE SCALE TEXT yourself, character by character
+- Look in the title block (usually bottom right) for text like "SCALE: 3/16" = 1'-0""
+- Look near the drawing title for scale notation
+- Look for a graphical scale bar (a line marked with distances like 0...8'...16'...32')
+- IMPORTANT: Read the fraction EXACTLY. "3/16"" is NOT the same as "1/8""
+  - 3/16" = 1'-0" means 1 foot real = 3/16 inch on paper (ratio 1:64)
+  - 1/8" = 1'-0" means 1 foot real = 1/8 inch on paper (ratio 1:96)
+  - Getting this wrong makes the area off by 2.25x!
+- If scale info was provided above, VERIFY it matches what you see on the drawing
+- REPORT the scale you are using in your response
 
 STEP 2 — IDENTIFY THE BUILDING OUTLINE:
 - The building outline is the OUTERMOST boundary of the roof area
@@ -257,21 +274,25 @@ Respond with ONLY JSON:
     "building_shape": "rectangle",
     "dimensions_labeled": true,
     "measurement_method": "dimension_lines",
+    "scale_used": "3/16 inch = 1 foot (1:64)",
+    "scale_text_on_drawing": "3/16\" = 1'-0\"",
     "notes": "Building dimensions clearly labeled on roof plan. Roof area calculated as length x width."
 }}
 
 If dimensions were NOT labeled and you measured using the scale:
 {{
     "measurements": [
-        {{"type": "roof_area", "value": 14400, "unit": "sqft", "confidence": 0.65, "source": "Scale-measured from roof plan: ~160' x ~90' = 14,400 sqft", "location": "Main building footprint", "notes": "Measured by comparing building outline to scale bar. Scale: 1/8 inch = 1 foot. Building spans approximately 4.5 scale bars (32') wide = 144' and 2.8 scale bars long = 90'", "measurement_method": "scale_measurement"}},
-        {{"type": "parapet_wall", "value": 500, "unit": "lnft", "confidence": 0.60, "source": "Building perimeter: 2*(160+90) = 500 lnft", "location": "Building perimeter", "notes": "Estimated from scale measurement"}},
-        {{"type": "coping", "value": 500, "unit": "lnft", "confidence": 0.60, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
+        {{"type": "roof_area", "value": 5183, "unit": "sqft", "confidence": 0.70, "source": "Scale-measured from roof plan using 3/16\"=1'-0\" scale: ~72' x ~72' = 5,183 sqft", "location": "Main building footprint", "notes": "Measured by comparing building outline to scale bar. Scale verified as 3/16 inch = 1 foot (1:64). Building spans approximately X scale bars wide and Y scale bars long.", "measurement_method": "scale_measurement"}},
+        {{"type": "parapet_wall", "value": 288, "unit": "lnft", "confidence": 0.65, "source": "Building perimeter: 2*(72+72) = 288 lnft", "location": "Building perimeter", "notes": "Estimated from scale measurement"}},
+        {{"type": "coping", "value": 288, "unit": "lnft", "confidence": 0.65, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
     ],
-    "overall_confidence": 0.65,
+    "overall_confidence": 0.70,
     "building_shape": "rectangle",
     "dimensions_labeled": false,
     "measurement_method": "scale_measurement",
-    "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar."
+    "scale_used": "3/16 inch = 1 foot (1:64)",
+    "scale_text_on_drawing": "3/16\" = 1'-0\"",
+    "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar. Scale verified as 3/16\"=1'-0\"."
 }}"""
 
 

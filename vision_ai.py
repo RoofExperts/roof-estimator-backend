@@ -146,10 +146,12 @@ def classify_page(image_base64: str) -> dict:
 
 def detect_scale(image_base64: str) -> dict:
     """Use GPT-4o to find and parse the drawing scale.
-    Uses detail='low' since scale notation is typically large text
-    that doesn't need pixel-level precision.
+    Uses detail='high' because scale notation (especially fractions like
+    3/16" vs 1/8") requires pixel-level precision to read correctly.
+    Misreading the scale cascades into area errors (e.g., 1/8" vs 3/16"
+    gives a 2.25x area difference).
     """
-    return parse_vision_response(call_vision_api(image_base64, SCALE_DETECTION_PROMPT, detail="low"))
+    return parse_vision_response(call_vision_api(image_base64, SCALE_DETECTION_PROMPT, detail="high"))
 
 
 def extract_measurements_for_page(image_base64: str, page_type: str, scale_info: dict) -> dict:
@@ -612,7 +614,10 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
             if page_scale.get("scale_found"):
                 page_scales[page_num] = page_scale
-                print(f"[Vision]   Page {page_num}: scale = {page_scale.get('scale_notation')}")
+                print(f"[Vision]   Page {page_num}: scale = {page_scale.get('scale_notation')} "
+                      f"(ratio 1:{page_scale.get('scale_ratio')}, "
+                      f"raw_text: {page_scale.get('scale_text_as_read', 'n/a')}, "
+                      f"confidence: {page_scale.get('confidence', 0):.0%})")
                 # Update file-level scale with the first (or highest-confidence) found
                 if not file_scale_info.get("scale_found") or \
                    page_scale.get("confidence", 0) > file_scale_info.get("confidence", 0):
@@ -656,8 +661,11 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                         method = area_result.get("measurement_method", "unknown")
                         dims_labeled = area_result.get("dimensions_labeled", False)
                         building_shape = area_result.get("building_shape", "unknown")
+                        scale_used = area_result.get("scale_used", "unknown")
+                        scale_text = area_result.get("scale_text_on_drawing", "unknown")
                         print(f"[Vision]   Page {page_num}: Area measurement found {len(area_measurements)} items "
-                              f"(method: {method}, dims_labeled: {dims_labeled}, shape: {building_shape})")
+                              f"(method: {method}, dims_labeled: {dims_labeled}, shape: {building_shape}, "
+                              f"scale_used: {scale_used}, scale_on_drawing: {scale_text})")
                         for am in area_measurements:
                             am["_source_page_type"] = "roof_plan"
                             am["measurement_method"] = method
