@@ -211,16 +211,18 @@ Your PRIMARY mission is to MEASURE THE BUILDING FOOTPRINT to calculate the ROOF 
 
 HOW TO MEASURE THE BUILDING FOOTPRINT FROM A ROOF PLAN:
 
-STEP 1 — VERIFY THE SCALE (CRITICAL — do NOT skip this):
-- Look at this page and READ THE SCALE TEXT yourself, character by character
-- Look in the title block (usually bottom right) for text like "SCALE: 3/16" = 1'-0""
-- Look near the drawing title for scale notation
-- Look for a graphical scale bar (a line marked with distances like 0...8'...16'...32')
-- IMPORTANT: Read the fraction EXACTLY. "3/16"" is NOT the same as "1/8""
-  - 3/16" = 1'-0" means 1 foot real = 3/16 inch on paper (ratio 1:64)
-  - 1/8" = 1'-0" means 1 foot real = 1/8 inch on paper (ratio 1:96)
-  - Getting this wrong makes the area off by 2.25x!
-- If scale info was provided above, VERIFY it matches what you see on the drawing
+STEP 1 — DETERMINE THE SCALE:
+- If the scale information above says "MANDATORY" or "SET BY THE USER", SKIP this step entirely.
+  Use EXACTLY the scale provided above — it has been verified by the user.
+- Otherwise, verify the scale:
+  - Look at this page and READ THE SCALE TEXT yourself, character by character
+  - Look in the title block (usually bottom right) for text like "SCALE: 3/16" = 1'-0""
+  - Look near the drawing title for scale notation
+  - Look for a graphical scale bar (a line marked with distances like 0...8'...16'...32')
+  - IMPORTANT: Read the fraction EXACTLY. "3/16"" is NOT the same as "1/8""
+    - 3/16" = 1'-0" means 1 foot real = 3/16 inch on paper (ratio 1:64)
+    - 1/8" = 1'-0" means 1 foot real = 1/8 inch on paper (ratio 1:96)
+    - Getting this wrong makes the area off by 2.25x!
 - REPORT the scale you are using in your response
 
 STEP 2 — IDENTIFY THE BUILDING OUTLINE:
@@ -241,10 +243,13 @@ Method B — If NO dimensions are labeled, use the scale visually:
   - Multiply by the scale bar value to get feet
   - Example: scale bar = 32 feet, building is ~4.5 scale bars wide = 144 feet
 
-Method C — Calculate from scale ratio:
+Method C — Calculate from scale ratio (USE THE SCALE PROVIDED ABOVE):
   - If the building appears to span roughly X inches on the drawing
-  - And the scale is 1/8" = 1'-0" (ratio 1:96)
-  - Then X inches on drawing = X × 8 feet in reality
+  - Use the scale ratio provided in the SCALE INFORMATION section above
+  - Formula: real feet = X inches on paper × (scale_ratio / 12)
+  - Example for 3/16" = 1'-0" (ratio 1:64): X inches × (64/12) = X × 5.33 feet
+  - Example for 1/8" = 1'-0" (ratio 1:96): X inches × (96/12) = X × 8 feet
+  - ALWAYS use the scale provided above — do NOT guess or pick a different scale
 
 STEP 4 — CALCULATE AREA:
 - For a simple rectangle: Area = Length × Width
@@ -416,13 +421,31 @@ def parse_vision_response(response_text: str) -> dict:
 def build_prompt_for_page_type(page_type: str, scale_info: dict) -> str:
     """Build the appropriate extraction prompt based on page type."""
     if scale_info and scale_info.get("scale_found"):
-        scale_context = (
-            f"IMPORTANT SCALE INFORMATION:\n"
-            f"The drawing scale is: {scale_info.get('scale_notation', 'unknown')}\n"
-            f"Scale ratio: 1:{scale_info.get('scale_ratio', 'unknown')}\n"
-            f"Use this scale to convert any measurements you derive from the drawing dimensions.\n"
-            f"If dimensions are already labeled in feet/inches on the plan, use those directly."
-        )
+        scale_notation = scale_info.get('scale_notation', 'unknown')
+        scale_ratio = scale_info.get('scale_ratio', 'unknown')
+        is_manual = scale_info.get('is_manual', False)
+
+        if is_manual:
+            # User manually set the scale — be VERY authoritative, do NOT let GPT override
+            scale_context = (
+                f"*** MANDATORY SCALE — SET BY THE USER (DO NOT OVERRIDE) ***\n"
+                f"The drawing scale is: {scale_notation}\n"
+                f"Scale ratio: 1:{scale_ratio}\n"
+                f"This scale was manually verified and set by the user. It is CORRECT.\n"
+                f"DO NOT attempt to read or verify the scale from the drawing.\n"
+                f"DO NOT override this scale with anything you see on the drawing.\n"
+                f"You MUST use this exact scale for ALL measurements.\n"
+                f"If dimensions are already labeled in feet/inches on the plan, use those directly.\n"
+                f"If you need to measure using the scale: 1 inch on paper = {scale_ratio} inches real = {float(scale_ratio)/12:.2f} feet real."
+            )
+        else:
+            scale_context = (
+                f"IMPORTANT SCALE INFORMATION:\n"
+                f"The drawing scale is: {scale_notation}\n"
+                f"Scale ratio: 1:{scale_ratio}\n"
+                f"Use this scale to convert any measurements you derive from the drawing dimensions.\n"
+                f"If dimensions are already labeled in feet/inches on the plan, use those directly."
+            )
     else:
         scale_context = (
             "NOTE: No scale was detected for this drawing.\n"

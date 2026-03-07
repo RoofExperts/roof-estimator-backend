@@ -627,6 +627,7 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 "scale_notation": plan_file.manual_scale,
                 "scale_ratio": plan_file.manual_scale_ratio,
                 "confidence": 1.0,
+                "is_manual": True,
                 "notes": "Manual scale set by user (overrides AI detection)",
             }
             file_scale_info = manual_scale_info
