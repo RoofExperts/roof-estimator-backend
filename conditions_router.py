@@ -141,11 +141,15 @@ class RoofSystemResponse(BaseModel):
 
 
 class ConditionMaterialCreate(BaseModel):
-    """Schema for adding a material to a condition."""
-    material_name: str
-    material_category: str
-    unit: str
-    coverage_rate: float
+    """Schema for adding a material to a condition.
+
+    If cost_database_item_id is provided, material_name/category/unit are
+    auto-populated from the CostDatabaseItem (so they become optional).
+    """
+    material_name: Optional[str] = None
+    material_category: Optional[str] = None
+    unit: Optional[str] = None
+    coverage_rate: float = 1.0
     waste_factor: float = 0.10
     calc_type: Optional[str] = None
     is_included: bool = True
@@ -773,10 +777,39 @@ def add_condition_material(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Add a material to a condition (custom add)."""
+    """Add a material to a condition.
+
+    If cost_database_item_id is provided, auto-populates material_name,
+    material_category, and unit from the CostDatabaseItem record.
+    """
     condition = db.query(RoofCondition).filter(RoofCondition.id == condition_id).first()
     if not condition:
         raise HTTPException(status_code=404, detail="Condition not found")
+
+    # Auto-populate from cost database item if provided
+    material_name = mat.material_name
+    material_category = mat.material_category
+    unit = mat.unit
+
+    if mat.cost_database_item_id:
+        cost_item = db.query(CostDatabaseItem).filter(
+            CostDatabaseItem.id == mat.cost_database_item_id
+        ).first()
+        if cost_item:
+            if not material_name:
+                material_name = cost_item.material_name
+            if not material_category:
+                material_category = cost_item.material_category
+            if not unit:
+                unit = cost_item.unit
+
+    # Validate required fields
+    if not material_name or not material_category or not unit:
+        raise HTTPException(
+            status_code=400,
+            detail="material_name, material_category, and unit are required "
+                   "(provide them directly or via cost_database_item_id)"
+        )
 
     # Get max sort_order for this condition
     max_order = db.query(ConditionMaterial).filter(
@@ -785,9 +818,9 @@ def add_condition_material(
 
     cm = ConditionMaterial(
         condition_id=condition_id,
-        material_name=mat.material_name,
-        material_category=mat.material_category,
-        unit=mat.unit,
+        material_name=material_name,
+        material_category=material_category,
+        unit=unit,
         coverage_rate=mat.coverage_rate,
         waste_factor=mat.waste_factor,
         calc_type=mat.calc_type,
@@ -851,6 +884,37 @@ def delete_condition_material(
     db.delete(cm)
     db.commit()
     return {"message": "Material removed from condition"}
+
+
+@router.put("/conditions/{condition_id}/materials/reorder")
+def reorder_condition_materials(
+    condition_id: int,
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Reorder materials within a condition.
+
+    Expects payload: { "items": [{"material_id": 1, "sort_order": 0}, ...] }
+    """
+    condition = db.query(RoofCondition).filter(RoofCondition.id == condition_id).first()
+    if not condition:
+        raise HTTPException(status_code=404, detail="Condition not found")
+
+    items = payload.get("items", [])
+    for item in items:
+        mid = item.get("material_id")
+        order = item.get("sort_order", 0)
+        if mid is not None:
+            cm = db.query(ConditionMaterial).filter(
+                ConditionMaterial.id == mid,
+                ConditionMaterial.condition_id == condition_id
+            ).first()
+            if cm:
+                cm.sort_order = order
+
+    db.commit()
+    return {"message": f"Reordered {len(items)} materials"}
 
 
 @router.post("/projects/{project_id}/populate-materials")
