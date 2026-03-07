@@ -4,8 +4,9 @@ FastAPI endpoints for the AI Vision Plan Reader.
 
 import os
 import tempfile
+import threading
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
@@ -55,7 +56,6 @@ class SaveMarkupsRequest(BaseModel):
 def upload_plan(
     project_id: int,
     file: UploadFile = File(...),
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -87,14 +87,14 @@ def upload_plan(
     with open(temp_path, "wb") as f:
         f.write(file.file.read())
 
-    if background_tasks:
-        background_tasks.add_task(
-            run_plan_analysis_background,
-            project_id, plan_file.id, temp_path,
-        )
-    else:
-        from vision_ai import run_plan_analysis
-        run_plan_analysis(project_id, plan_file.id, temp_path, db)
+    # Use threading.Thread instead of BackgroundTasks — BackgroundTasks gets
+    # killed on Render free tier before the analysis completes.
+    thread = threading.Thread(
+        target=run_plan_analysis_background,
+        args=(project_id, plan_file.id, temp_path),
+        daemon=False,
+    )
+    thread.start()
 
     return {
         "message": "Plan uploaded. Analysis started in background.",
@@ -107,7 +107,6 @@ def upload_plan(
 @router.post("/plan-files/{plan_file_id}/reanalyze")
 def reanalyze_plan(
     plan_file_id: int,
-    background_tasks: BackgroundTasks = None,
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
@@ -167,14 +166,12 @@ def reanalyze_plan(
 
     project_id = plan_file.project_id
 
-    if background_tasks:
-        background_tasks.add_task(
-            run_plan_analysis_background,
-            project_id, plan_file.id, temp_path,
-        )
-    else:
-        from vision_ai import run_plan_analysis
-        run_plan_analysis(project_id, plan_file.id, temp_path, db)
+    thread = threading.Thread(
+        target=run_plan_analysis_background,
+        args=(project_id, plan_file.id, temp_path),
+        daemon=False,
+    )
+    thread.start()
 
     return {
         "message": "Re-analysis started in background.",
@@ -455,6 +452,53 @@ def reset_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
         "previous_status": old_status,
         "new_status": "failed",
     }
+
+
+@router.delete("/plan-files/{plan_file_id}")
+def delete_plan_file(
+    plan_file_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a plan file and all its associated data (extractions, pages, markups, linked conditions)."""
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    # Delete linked conditions (via extractions)
+    extractions = db.query(VisionExtraction).filter(
+        VisionExtraction.plan_file_id == plan_file_id
+    ).all()
+    condition_ids_to_delete = set()
+    for ext in extractions:
+        if ext.condition_id:
+            condition_ids_to_delete.add(ext.condition_id)
+            ext.condition_id = None
+    db.flush()
+
+    for cid in condition_ids_to_delete:
+        db.query(EstimateLineItem).filter(EstimateLineItem.condition_id == cid).delete()
+        cond = db.query(RoofCondition).filter(RoofCondition.id == cid).first()
+        if cond:
+            db.delete(cond)
+
+    # Delete extractions, page analyses, markups
+    for ext in extractions:
+        db.delete(ext)
+    db.query(PlanPageAnalysis).filter(PlanPageAnalysis.plan_file_id == plan_file_id).delete()
+    db.query(PlanMarkup).filter(PlanMarkup.plan_file_id == plan_file_id).delete()
+
+    # Try to delete S3 file (non-fatal if it fails)
+    try:
+        from s3_service import delete_file_from_s3
+        delete_file_from_s3(plan_file.s3_key)
+    except Exception:
+        pass  # S3 cleanup is best-effort
+
+    db.delete(plan_file)
+    db.commit()
+
+    return {"message": "Plan file deleted", "plan_file_id": plan_file_id}
 
 
 # ============================================================================

@@ -68,3 +68,14 @@ def download_file_from_s3(file_url: str, temp_file):
         file_key,
         temp_file
     )
+
+# =============================
+# DELETE FILE FROM S3
+# =============================
+
+def delete_file_from_s3(file_url: str):
+    """
+    Deletes a file from S3 using its URL.
+    """
+    file_key = file_url.split(".amazonaws.com/")[-1]
+    s3_client.delete_object(Bucket=AWS_BUCKET_NAME, Key=file_key)
