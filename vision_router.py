@@ -197,6 +197,8 @@ def list_plan_files(project_id: int, db: Session = Depends(get_db), current_user
             "page_count": p.page_count,
             "detected_scale": p.detected_scale,
             "scale_confidence": p.scale_confidence,
+            "manual_scale": p.manual_scale,
+            "manual_scale_ratio": p.manual_scale_ratio,
             "error_message": p.error_message,
             "created_at": str(p.created_at) if p.created_at else None,
         }
@@ -453,6 +455,69 @@ def reset_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
         "previous_status": old_status,
         "new_status": "failed",
     }
+
+
+# Common architectural scales for the dropdown
+COMMON_SCALES = [
+    {"label": "1/16\" = 1'-0\"", "notation": "1/16 inch = 1 foot", "ratio": 192},
+    {"label": "3/32\" = 1'-0\"", "notation": "3/32 inch = 1 foot", "ratio": 128},
+    {"label": "1/8\" = 1'-0\"", "notation": "1/8 inch = 1 foot", "ratio": 96},
+    {"label": "3/16\" = 1'-0\"", "notation": "3/16 inch = 1 foot", "ratio": 64},
+    {"label": "1/4\" = 1'-0\"", "notation": "1/4 inch = 1 foot", "ratio": 48},
+    {"label": "3/8\" = 1'-0\"", "notation": "3/8 inch = 1 foot", "ratio": 32},
+    {"label": "1/2\" = 1'-0\"", "notation": "1/2 inch = 1 foot", "ratio": 24},
+    {"label": "3/4\" = 1'-0\"", "notation": "3/4 inch = 1 foot", "ratio": 16},
+    {"label": "1\" = 1'-0\"", "notation": "1 inch = 1 foot", "ratio": 12},
+]
+
+
+class ScaleOverrideRequest(BaseModel):
+    scale_notation: Optional[str] = None  # e.g., "3/16 inch = 1 foot"
+    scale_ratio: Optional[float] = None   # e.g., 64
+    clear: Optional[bool] = False         # Set True to remove manual override
+
+
+@router.put("/plan-files/{plan_file_id}/scale")
+def set_plan_scale(
+    plan_file_id: int,
+    body: ScaleOverrideRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """Set or clear a manual scale override for a plan file.
+    When set, this overrides the AI-detected scale for all measurements.
+    """
+    plan_file = db.query(RoofPlanFile).filter(RoofPlanFile.id == plan_file_id).first()
+    if not plan_file:
+        raise HTTPException(status_code=404, detail="Plan file not found")
+
+    if body.clear:
+        plan_file.manual_scale = None
+        plan_file.manual_scale_ratio = None
+        db.commit()
+        return {"message": "Manual scale cleared", "plan_file_id": plan_file_id,
+                "manual_scale": None, "detected_scale": plan_file.detected_scale}
+
+    if not body.scale_notation and not body.scale_ratio:
+        raise HTTPException(status_code=400, detail="Provide scale_notation and/or scale_ratio")
+
+    plan_file.manual_scale = body.scale_notation
+    plan_file.manual_scale_ratio = body.scale_ratio
+    db.commit()
+
+    return {
+        "message": "Manual scale set",
+        "plan_file_id": plan_file_id,
+        "manual_scale": plan_file.manual_scale,
+        "manual_scale_ratio": plan_file.manual_scale_ratio,
+        "detected_scale": plan_file.detected_scale,
+    }
+
+
+@router.get("/common-scales")
+def get_common_scales():
+    """Return the list of common architectural scales for the UI dropdown."""
+    return COMMON_SCALES
 
 
 @router.delete("/plan-files/{plan_file_id}")

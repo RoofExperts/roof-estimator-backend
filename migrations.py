@@ -155,6 +155,12 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "cost_database_items", "product_name", "TEXT"):
         changes += 1
 
+    # ── roof_plan_files: manual scale override ──
+    if add_column_if_missing(engine, "roof_plan_files", "manual_scale", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_plan_files", "manual_scale_ratio", "FLOAT"):
+        changes += 1
+
     # ── roof_conditions: is_active + roof_system_id (system template approach) ──
     if add_column_if_missing(engine, "roof_conditions", "is_active", "BOOLEAN", True):
         changes += 1

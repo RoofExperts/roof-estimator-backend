@@ -21,6 +21,8 @@ class RoofPlanFile(Base):
     page_count = Column(Integer, nullable=True)
     detected_scale = Column(String(200), nullable=True)
     scale_confidence = Column(Float, nullable=True)
+    manual_scale = Column(String(200), nullable=True)  # User override: "3/16 inch = 1 foot"
+    manual_scale_ratio = Column(Float, nullable=True)  # User override: 64 for 3/16"=1'-0"
     error_message = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

@@ -619,6 +619,22 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         file_scale_info = {"scale_found": False}  # Best/first scale for file-level display
         page_scales = {}  # page_num -> scale_info for per-page tracking
 
+        # Check for manual scale override (user-set scale takes priority)
+        manual_scale_info = None
+        if plan_file.manual_scale and plan_file.manual_scale_ratio:
+            manual_scale_info = {
+                "scale_found": True,
+                "scale_notation": plan_file.manual_scale,
+                "scale_ratio": plan_file.manual_scale_ratio,
+                "confidence": 1.0,
+                "notes": "Manual scale set by user (overrides AI detection)",
+            }
+            file_scale_info = manual_scale_info
+            plan_file.detected_scale = f"{plan_file.manual_scale} (manual)"
+            plan_file.scale_confidence = 1.0
+            db.commit()
+            print(f"[Vision] Using MANUAL scale override: {plan_file.manual_scale} (ratio 1:{plan_file.manual_scale_ratio})")
+
         for ext_idx, page_data in enumerate(pages_to_extract):
             page_num = page_data["page_number"]
             page_type = page_classifications.get(page_num, {}).get("page_type", "unknown")
@@ -628,12 +644,17 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             plan_file.error_message = f"Extracting measurements... (page {ext_idx + 1}/{len(pages_to_extract)})"
             db.commit()
 
-            # Detect scale for THIS specific page (uses detail="low" so it's fast)
-            try:
-                page_scale = detect_scale(page_data["image_base64"])
-            except Exception as scale_err:
-                print(f"[Vision]   Page {page_num}: scale detection failed - {scale_err}")
-                page_scale = {"scale_found": False}
+            # Detect scale for THIS specific page
+            # Skip AI detection if manual scale is set (user override takes priority)
+            if manual_scale_info:
+                page_scale = manual_scale_info
+                print(f"[Vision]   Page {page_num}: using manual scale override")
+            else:
+                try:
+                    page_scale = detect_scale(page_data["image_base64"])
+                except Exception as scale_err:
+                    print(f"[Vision]   Page {page_num}: scale detection failed - {scale_err}")
+                    page_scale = {"scale_found": False}
 
             if page_scale.get("scale_found"):
                 page_scales[page_num] = page_scale
