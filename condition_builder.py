@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from models import Project
 from conditions_models import (
-    RoofCondition, RoofSystem, MaterialTemplate, ConditionMaterial, CostDatabaseItem, CONDITION_TYPES
+    RoofCondition, RoofSystem, MaterialTemplate, ConditionMaterial, CostDatabaseItem, EstimateLineItem, CONDITION_TYPES
 )
 from system_templates import get_system_conditions
 from vision_models import RoofPlanFile, VisionExtraction
@@ -475,6 +475,7 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
             ).update({VisionExtraction.condition_id: None}, synchronize_session=False)
             db.flush()
             for c in existing_conditions:
+                db.query(EstimateLineItem).filter(EstimateLineItem.condition_id == c.id).delete()
                 db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
                 db.delete(c)
             db.flush()
@@ -500,6 +501,7 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
         ).update({VisionExtraction.condition_id: None}, synchronize_session=False)
         db.flush()
         for c in legacy_ai:
+            db.query(EstimateLineItem).filter(EstimateLineItem.condition_id == c.id).delete()
             db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
             db.delete(c)
         db.flush()
