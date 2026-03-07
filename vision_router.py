@@ -14,7 +14,7 @@ from typing import Optional, List
 from auth import get_current_user
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction, PlanMarkup
-from conditions_models import RoofCondition, EstimateLineItem
+from conditions_models import RoofCondition, EstimateLineItem, ConditionMaterial
 from s3_service import upload_file_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
 
@@ -134,7 +134,8 @@ def reanalyze_plan(
 
     # Now safe to delete conditions (no more FK references)
     for cid in condition_ids_to_delete:
-        # Delete estimate line items first
+        # Delete condition materials and estimate line items first (FK children)
+        db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == cid).delete()
         db.query(EstimateLineItem).filter(
             EstimateLineItem.condition_id == cid
         ).delete()
@@ -477,6 +478,7 @@ def delete_plan_file(
     db.flush()
 
     for cid in condition_ids_to_delete:
+        db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == cid).delete()
         db.query(EstimateLineItem).filter(EstimateLineItem.condition_id == cid).delete()
         cond = db.query(RoofCondition).filter(RoofCondition.id == cid).first()
         if cond:
