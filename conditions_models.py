@@ -134,6 +134,10 @@ class ConditionMaterial(Base):
     )
     notes = Column(String, nullable=True)
     sort_order = Column(Integer, default=0)
+    cost_database_item_id = Column(
+        Integer, nullable=True,
+        comment="Explicit link to a CostDatabaseItem (for product swap). If set, used instead of fuzzy name matching."
+    )
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships

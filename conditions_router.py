@@ -28,6 +28,7 @@ from conditions_models import (
 from models import SavedEstimate
 from estimate_engine import calculate_estimate, get_estimate_summary
 from estimate_engine import get_available_condition_types, get_materials_for_condition
+from estimate_engine import _find_cost_item, _calculate_quantity
 from condition_builder import smart_build_conditions, _populate_materials_for_condition
 from takeoff_engine import generate_takeoff
 
@@ -81,6 +82,7 @@ class ConditionMaterialCreate(BaseModel):
     calc_type: Optional[str] = None
     is_included: bool = True
     notes: Optional[str] = None
+    cost_database_item_id: Optional[int] = None
 
 
 class ConditionMaterialUpdate(BaseModel):
@@ -93,6 +95,7 @@ class ConditionMaterialUpdate(BaseModel):
     override_quantity: Optional[float] = None
     notes: Optional[str] = None
     sort_order: Optional[int] = None
+    cost_database_item_id: Optional[int] = None
 
 
 class ConditionMaterialResponse(BaseModel):
@@ -109,6 +112,7 @@ class ConditionMaterialResponse(BaseModel):
     override_quantity: Optional[float]
     notes: Optional[str]
     sort_order: int
+    cost_database_item_id: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -313,8 +317,14 @@ def list_conditions_with_materials(
 ):
     """
     List all conditions for a project WITH their nested materials.
+    Enriched with calculated quantities and cost data from the cost database.
     This is the primary endpoint for the Conditions accordion UI.
     """
+    from models import Project
+
+    project = db.query(Project).filter(Project.id == project_id).first()
+    org_id = project.org_id if project else current_user["org_id"]
+
     conditions = db.query(RoofCondition).filter(
         RoofCondition.project_id == project_id
     ).all()
@@ -327,6 +337,51 @@ def list_conditions_with_materials(
 
         ct_info = CONDITION_TYPES.get(c.condition_type, {"label": c.condition_type})
 
+        enriched_materials = []
+        for m in materials:
+            # Calculate quantity using same formula as estimate engine
+            qty_calculated = _calculate_quantity(c, m)
+
+            # Look up cost data — prefer explicit link, fallback to fuzzy match
+            cost_item = None
+            if m.cost_database_item_id:
+                cost_item = db.query(CostDatabaseItem).filter(
+                    CostDatabaseItem.id == m.cost_database_item_id,
+                    CostDatabaseItem.is_active == True,
+                ).first()
+            if not cost_item:
+                cost_item = _find_cost_item(m.material_name, m.unit, org_id, db)
+
+            unit_cost = cost_item.unit_cost if cost_item else 0.0
+            labor_cost = cost_item.labor_cost_per_unit if cost_item else None
+            extended_cost = round(qty_calculated * unit_cost, 2) if m.is_included else 0.0
+
+            enriched_materials.append({
+                "id": m.id,
+                "condition_id": m.condition_id,
+                "material_template_id": m.material_template_id,
+                "material_name": m.material_name,
+                "material_category": m.material_category,
+                "unit": m.unit,
+                "coverage_rate": m.coverage_rate,
+                "waste_factor": m.waste_factor,
+                "calc_type": m.calc_type,
+                "is_included": m.is_included,
+                "override_quantity": m.override_quantity,
+                "notes": m.notes,
+                "sort_order": m.sort_order,
+                "cost_database_item_id": m.cost_database_item_id,
+                # Enriched cost data
+                "qty_calculated": round(qty_calculated, 2),
+                "unit_cost": unit_cost,
+                "labor_cost_per_unit": labor_cost,
+                "extended_cost": extended_cost,
+                "purchase_unit": cost_item.purchase_unit if cost_item else None,
+                "units_per_purchase": cost_item.units_per_purchase if cost_item else None,
+                "product_name": cost_item.product_name if cost_item else None,
+                "cost_db_match": cost_item.material_name if cost_item else None,
+            })
+
         result.append({
             "id": c.id,
             "project_id": c.project_id,
@@ -338,24 +393,7 @@ def list_conditions_with_materials(
             "wind_zone": c.wind_zone,
             "flashing_height": c.flashing_height,
             "fastener_spacing": c.fastener_spacing,
-            "materials": [
-                {
-                    "id": m.id,
-                    "condition_id": m.condition_id,
-                    "material_template_id": m.material_template_id,
-                    "material_name": m.material_name,
-                    "material_category": m.material_category,
-                    "unit": m.unit,
-                    "coverage_rate": m.coverage_rate,
-                    "waste_factor": m.waste_factor,
-                    "calc_type": m.calc_type,
-                    "is_included": m.is_included,
-                    "override_quantity": m.override_quantity,
-                    "notes": m.notes,
-                    "sort_order": m.sort_order,
-                }
-                for m in materials
-            ],
+            "materials": enriched_materials,
         })
 
     return result
@@ -479,6 +517,7 @@ def add_condition_material(
         is_included=mat.is_included,
         notes=mat.notes,
         sort_order=max_order,
+        cost_database_item_id=mat.cost_database_item_id,
     )
     db.add(cm)
     db.commit()
@@ -514,6 +553,8 @@ def update_condition_material(
         cm.notes = mat.notes
     if mat.sort_order is not None:
         cm.sort_order = mat.sort_order
+    if mat.cost_database_item_id is not None:
+        cm.cost_database_item_id = mat.cost_database_item_id
 
     db.commit()
     db.refresh(cm)
@@ -790,6 +831,53 @@ def list_cost_items(
     if material_category:
         query = query.filter(CostDatabaseItem.material_category == material_category)
     return query.order_by(CostDatabaseItem.material_name).all()
+
+
+@router.get("/cost-database/search")
+def search_cost_database(
+    q: str = Query("", description="Search term for material name"),
+    category: Optional[str] = Query(None, description="Filter by material_category"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Search cost database items by name (partial match) and optional category.
+    Used by the Conditions tab for Add Material and Product Swap flows.
+    Returns matching items from org's cost DB + global fallbacks.
+    """
+    from sqlalchemy import func
+
+    org_id = current_user["org_id"]
+    query = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_active == True,
+        or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
+    )
+
+    if category:
+        query = query.filter(CostDatabaseItem.material_category == category)
+
+    if q.strip():
+        search_term = f"%{q.strip().lower()}%"
+        query = query.filter(func.lower(CostDatabaseItem.material_name).like(search_term))
+
+    results = query.order_by(CostDatabaseItem.material_name).limit(50).all()
+
+    return [
+        {
+            "id": item.id,
+            "material_name": item.material_name,
+            "manufacturer": item.manufacturer,
+            "material_category": item.material_category,
+            "unit": item.unit,
+            "unit_cost": item.unit_cost,
+            "labor_cost_per_unit": item.labor_cost_per_unit,
+            "purchase_unit": item.purchase_unit,
+            "units_per_purchase": item.units_per_purchase,
+            "product_name": item.product_name,
+            "description": item.description,
+        }
+        for item in results
+    ]
 
 
 @router.post("/cost-database/upload-pricing")
