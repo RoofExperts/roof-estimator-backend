@@ -199,15 +199,15 @@ def seed_material_templates(db: Session):
 
     t("TPO", "perimeter", "TPO Membrane",                    "membrane",   "lnft", 1.0, 0.10, sort_order=10)
     t("TPO", "perimeter", "Perimeter Fasteners",             "fastener",   "each", 2.0, 0.10, sort_order=20)
-    t("TPO", "perimeter", "Perimeter Bar (Aluminum)",        "accessory",  "lnft", 1.0, 0.05, sort_order=30)
+    t("TPO", "perimeter", "Termination Bar",        "accessory",  "lnft", 1.0, 0.05, sort_order=30)
 
     t("EPDM", "perimeter", "EPDM Membrane",                 "membrane",   "lnft", 1.0, 0.10, sort_order=10)
     t("EPDM", "perimeter", "Perimeter Fasteners",           "fastener",   "each", 2.0, 0.10, sort_order=20)
-    t("EPDM", "perimeter", "Perimeter Bar (Aluminum)",      "accessory",  "lnft", 1.0, 0.05, sort_order=30)
+    t("EPDM", "perimeter", "Termination Bar",      "accessory",  "lnft", 1.0, 0.05, sort_order=30)
 
     t("PVC", "perimeter", "PVC Membrane",                    "membrane",   "lnft", 1.0, 0.10, sort_order=10)
     t("PVC", "perimeter", "Perimeter Fasteners",             "fastener",   "each", 2.0, 0.10, sort_order=20)
-    t("PVC", "perimeter", "Perimeter Bar (Aluminum)",        "accessory",  "lnft", 1.0, 0.05, sort_order=30)
+    t("PVC", "perimeter", "Termination Bar",        "accessory",  "lnft", 1.0, 0.05, sort_order=30)
 
     # ════════════════════════════════════════════════════════════════════════
     # CORNER — membrane + fasteners + sealant
@@ -445,8 +445,6 @@ def seed_cost_database(db: Session):
       "Box", 500, "Term Bar Fasteners (500ct)")
     c("Premolded Sealant Pocket", "Portals Plus", "accessory", "each", 22.00, 20.00,
       "EA", 1, "Premolded Sealant Pocket (each)")
-    c("Perimeter Bar (Aluminum)", "Metal Era", "accessory", "lnft", 1.75, 1.50,
-      "Sticks", 10, "Perimeter Bar Aluminum 10ft Sticks")
     c("Perimeter Fasteners", "OMG", "fastener", "each", 0.35, 0.15,
       "Box", 500, "Perimeter Fasteners (500ct)")
     c("Corner Fasteners", "OMG", "fastener", "each", 0.35, 0.15,
@@ -580,7 +578,6 @@ def update_global_purchase_units(db: Session):
         ("termination bar", "lnft"): ("Sticks", 10, "Termination Bar 10ft Sticks"),
         ("termination bar fasteners", "each"): ("Box", 500, "Term Bar Fasteners (500ct)"),
         ("premolded sealant pocket", "each"): ("EA", 1, "Premolded Sealant Pocket (each)"),
-        ("perimeter bar (aluminum)", "lnft"): ("Sticks", 10, "Perimeter Bar Aluminum 10ft Sticks"),
         ("perimeter fasteners", "each"): ("Box", 500, "Perimeter Fasteners (500ct)"),
         ("corner fasteners", "each"): ("Box", 500, "Corner Fasteners (500ct)"),
         ("edge fasteners", "each"): ("Box", 500, "Edge Fasteners (500ct)"),
@@ -744,6 +741,34 @@ def resync_cost_items_for_org(org_id: int, db: Session, update_pricing: bool = F
     return {"added": added, "updated": updated}
 
 
+def migrate_consolidate_perimeter_bar(db: Session):
+    """Rename 'Perimeter Bar (Aluminum)' → 'Termination Bar' everywhere."""
+    # Update material templates
+    updated_templates = db.query(MaterialTemplate).filter(
+        MaterialTemplate.material_name == "Perimeter Bar (Aluminum)"
+    ).update({"material_name": "Termination Bar"}, synchronize_session=False)
+
+    # Update condition materials (already-populated project materials)
+    from conditions_models import ConditionMaterial
+    updated_cond_mats = db.query(ConditionMaterial).filter(
+        ConditionMaterial.material_name == "Perimeter Bar (Aluminum)"
+    ).update({"material_name": "Termination Bar"}, synchronize_session=False)
+
+    # Remove duplicate cost database entry for Perimeter Bar
+    from conditions_models import CostDatabaseItem
+    deleted_cost = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == "Perimeter Bar (Aluminum)"
+    ).delete(synchronize_session=False)
+
+    if updated_templates or updated_cond_mats or deleted_cost:
+        db.commit()
+        print(f"[migrate] Consolidated Perimeter Bar → Termination Bar: "
+              f"{updated_templates} templates, {updated_cond_mats} condition materials, "
+              f"{deleted_cost} cost items removed")
+    else:
+        print("[migrate] Perimeter Bar already consolidated. Skipping.")
+
+
 def seed_database(db: Session):
     """Run all seed functions."""
     print("Starting database seed...")
@@ -751,5 +776,7 @@ def seed_database(db: Session):
     seed_cost_database(db)
     # Always ensure global items have purchase_unit data
     update_global_purchase_units(db)
+    # Run migrations
+    migrate_consolidate_perimeter_bar(db)
     db.commit()
     print("Database seeding complete.")
