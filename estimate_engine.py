@@ -326,7 +326,9 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
                         "purchase_unit": p_unit,
                         "units_per_purchase": p_per,
                         "product_name": p_name,
+                        "condition_types": set(),
                     }
+                consolidated[key]["condition_types"].add(condition.condition_type)
 
                 # Convert qty to the consolidated unit if different
                 # e.g. lnft → sqft for membrane when same cost item
@@ -390,6 +392,10 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
             else:
                 item["purchase_qty"] = math.ceil(item["total_qty"])
                 item["purchase_cost"] = item["total_cost"]
+
+        # Convert condition_types sets to sorted lists for JSON serialization
+        for item in consolidated.values():
+            item["condition_types"] = sorted(item.get("condition_types", set()))
 
         consolidated_list = sorted(consolidated.values(), key=lambda x: (x["material_category"], x["material_name"]))
 
