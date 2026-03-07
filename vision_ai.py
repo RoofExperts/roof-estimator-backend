@@ -394,15 +394,18 @@ def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> l
 
 # Page types that are useful for extraction, in priority order
 EXTRACTABLE_PAGE_TYPES = [
-    "slab_plan",    # Building dimensions â roof area, parapet wall, coping
-    "roof_plan",    # Drains, scuppers, pitch pans, pipes, curbs
+    "slab_plan",    # Building dimensions -> roof area, parapet wall, coping
+    "roof_plan",    # Drains, scuppers, pitch pans, pipes, curbs + area measurement
     "elevation",    # Parapet flashing, collector heads, downspouts
     "floor_plan",   # May have building dimensions like slab plan
-    "detail",       # May have flashing/curb details
+    # "detail" EXCLUDED - roof detail pages are reference only, not measured
     "structural",   # May have roof framing dimensions
     "mechanical",   # May have equipment info
     "site_plan",    # May show building footprint
 ]
+
+# Page types that should be skipped for measurement extraction (reference only)
+REFERENCE_ONLY_PAGE_TYPES = {"detail"}
 
 
 def select_pages_for_extraction(page_images: list, roof_pages: list, page_classifications: dict) -> list:
