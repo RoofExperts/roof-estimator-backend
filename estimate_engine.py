@@ -288,6 +288,7 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
                         "unit_cost": unit_cost,
                         "labor_cost": labor_cost,
                         "total_cost": 0,
+                        "waste_pct": mat.waste_factor or 0,
                     }
                 consolidated[key]["total_qty"] = round(consolidated[key]["total_qty"] + qty, 2)
                 consolidated[key]["total_cost"] = round(consolidated[key]["total_cost"] + extended, 2)
