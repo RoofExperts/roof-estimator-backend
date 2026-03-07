@@ -167,8 +167,11 @@ def _populate_materials_for_condition(
     if spec_data is None:
         spec_data = {}
 
-    # ── Prefer org-specific templates; fall back to global ──
-    # Pull org-specific first, then global, and de-duplicate by name+category
+    # ── Prefer system-specific templates over "common", org-specific over global ──
+    # Pull system-specific first, then common, and de-duplicate intelligently
+    OTHER_SYSTEMS = {"TPO", "EPDM", "PVC", "ModBit", "BUR", "StandingSeam"}
+    wrong_systems = OTHER_SYSTEMS - {system_type}
+
     templates = db.query(MaterialTemplate).filter(
         MaterialTemplate.condition_type == condition.condition_type,
         MaterialTemplate.is_active == True,
@@ -185,19 +188,39 @@ def _populate_materials_for_condition(
         MaterialTemplate.material_name.asc()
     ).all()
 
-    # De-duplicate: org-specific overrides global template of same name+category
+    # Filter out "common" templates whose name contains a WRONG system type
+    # (e.g. "TPO 60mil Membrane" in common when project is PVC)
+    def _belongs_to_wrong_system(tmpl):
+        if tmpl.system_type != "common":
+            return False
+        name_upper = tmpl.material_name.upper()
+        for ws in wrong_systems:
+            if ws.upper() in name_upper:
+                return True
+        return False
+
+    templates = [t for t in templates if not _belongs_to_wrong_system(t)]
+
+    # De-duplicate: system-specific overrides common; org-specific overrides global
     seen = {}
     deduped = []
     for tmpl in templates:
-        key = (tmpl.material_name, tmpl.material_category)
-        if key in seen:
+        key = (tmpl.material_category, tmpl.sort_order)
+        name_key = (tmpl.material_name, tmpl.material_category)
+        if name_key in seen:
             # Keep org-specific over global
-            if tmpl.org_id == org_id and seen[key].is_global:
-                deduped = [t for t in deduped if (t.material_name, t.material_category) != key]
+            existing = seen[name_key]
+            if tmpl.org_id == org_id and existing.is_global:
+                deduped = [t for t in deduped if (t.material_name, t.material_category) != name_key]
                 deduped.append(tmpl)
-                seen[key] = tmpl
+                seen[name_key] = tmpl
+            # Keep system-specific over common
+            elif tmpl.system_type == system_type and existing.system_type == "common":
+                deduped = [t for t in deduped if (t.material_name, t.material_category) != name_key]
+                deduped.append(tmpl)
+                seen[name_key] = tmpl
         else:
-            seen[key] = tmpl
+            seen[name_key] = tmpl
             deduped.append(tmpl)
 
     added = 0
