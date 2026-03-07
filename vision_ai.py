@@ -290,13 +290,36 @@ def cross_check_roof_area(measurements: list) -> list:
             cross_note = f"Cross-checked against {other_source_type}: {other_value:.0f} sqft ({discrepancy_pct:.1f}% diff, {match_label})"
             primary["notes"] = f"{existing_notes}; {cross_note}" if existing_notes else cross_note
 
-            # If large discrepancy and floor plan has higher confidence, consider it
-            if discrepancy_pct > 30 and other.get("confidence", 0) > primary.get("confidence", 0) + 0.15:
-                print(f"[Vision] WARNING: Large discrepancy and {other_source_type} has notably higher confidence. "
-                      f"Preferring {other_source_type} value.")
+            # Smart override logic:
+            # Floor/slab plans with labeled dimensions are very reliable since
+            # they read explicit numbers (e.g., "72'-0" x 72'-0"") rather than
+            # measuring by scale. If there's a significant discrepancy, prefer
+            # the floor plan dimensions.
+            other_is_dimension_source = other_source_type in ("floor_plan", "slab_plan")
+            primary_is_scale_based = primary.get("measurement_method") == "scale_measurement"
+
+            if discrepancy_pct > 20 and other_is_dimension_source:
+                # Floor plan with labeled dimensions vs roof plan scale measurement:
+                # Floor plan dimensions are more reliable (reading numbers vs measuring)
+                print(f"[Vision] OVERRIDE: {discrepancy_pct:.0f}% discrepancy — using {other_source_type} "
+                      f"dimensions ({other_value:.0f} sqft) over roof plan scale measurement ({primary_value:.0f} sqft)")
+                primary["value"] = other_value
+                primary["confidence"] = max(other.get("confidence", 0), primary.get("confidence", 0))
+                primary["notes"] += f"; OVERRIDDEN: used {other_source_type} labeled dimensions (more reliable than scale measurement)"
+                primary_value = other_value  # Update for subsequent comparisons
+            elif discrepancy_pct > 30 and other.get("confidence", 0) > primary.get("confidence", 0) + 0.10:
+                print(f"[Vision] OVERRIDE: Large discrepancy and {other_source_type} has higher confidence. "
+                      f"Using {other_value:.0f} sqft.")
                 primary["value"] = other_value
                 primary["confidence"] = other.get("confidence", 0)
                 primary["notes"] += f"; OVERRIDDEN: used {other_source_type} value due to higher confidence"
+                primary_value = other_value
+            elif discrepancy_pct <= 15 and other_is_dimension_source:
+                # Close match between roof plan and floor plan — great!
+                # Boost confidence since two sources agree
+                primary["confidence"] = min(0.95, primary.get("confidence", 0) + 0.10)
+                primary["notes"] += f"; CONFIRMED by {other_source_type} dimensions (within {discrepancy_pct:.0f}%)"
+                print(f"[Vision] CONFIRMED: Roof plan and {other_source_type} agree within {discrepancy_pct:.0f}% — boosting confidence")
 
     # Remove duplicate roof_area entries, keep only the primary
     non_area = [m for m in measurements if m.get("type") != "roof_area"]
