@@ -371,7 +371,7 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
 @router.get("/vision-version")
 def vision_version():
     """Returns the deployed code version for verification."""
-    return {"version": "v9-heartbeat-diag", "commit": "pending"}
+    return {"version": "v10-roof-plan-area-measurement", "commit": "931960c"}
 
 
 @router.get("/vision-health")
