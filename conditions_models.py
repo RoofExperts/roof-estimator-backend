@@ -40,6 +40,21 @@ class RoofSystem(Base):
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
+    # Specified Roof System details (user-editable dropdowns)
+    manufacturer = Column(String, nullable=True, comment="Manufacturer name (e.g., Carlisle, Firestone, GAF)")
+    membrane_thickness = Column(String, nullable=True, comment="45 mil, 60 mil, 80 mil, 90 mil fleeceback, etc.")
+    field_attachment = Column(String, nullable=True, comment="Mechanically Fastened, Rhinobond, Adhesive, Low Rise Foam")
+    wall_flashing_thickness = Column(String, nullable=True, comment="45 mil, 60 mil, 80 mil")
+    has_coverboard = Column(Boolean, default=False)
+    coverboard_attachment = Column(String, nullable=True, comment="Mechanically Fastened, Low Rise Foam")
+    has_top_insulation = Column(Boolean, default=False)
+    top_insulation_attachment = Column(String, nullable=True, comment="Mechanically Fastened, Gang Fastened, Low Rise Foam")
+    has_bottom_insulation = Column(Boolean, default=False)
+    bottom_insulation_attachment = Column(String, nullable=True, comment="Mechanically Fastened, Gang Fastened, Low Rise Foam")
+    has_vapor_barrier = Column(Boolean, default=False)
+    has_vapor_barrier_board = Column(Boolean, default=False)
+    vapor_barrier_board_attachment = Column(String, nullable=True, comment="Mechanically Fastened, Gang Fastened, Low Rise Foam")
+
     # Relationships
     conditions = relationship("RoofCondition", back_populates="roof_system", cascade="all, delete-orphan")
 

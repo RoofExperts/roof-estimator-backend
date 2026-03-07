@@ -80,6 +80,19 @@ class RoofSystemCreate(BaseModel):
     """Schema for creating a roof system."""
     name: str = "Roof Area 1"
     system_type: str = "TPO"
+    manufacturer: Optional[str] = None
+    membrane_thickness: Optional[str] = None
+    field_attachment: Optional[str] = None
+    wall_flashing_thickness: Optional[str] = None
+    has_coverboard: Optional[bool] = False
+    coverboard_attachment: Optional[str] = None
+    has_top_insulation: Optional[bool] = False
+    top_insulation_attachment: Optional[str] = None
+    has_bottom_insulation: Optional[bool] = False
+    bottom_insulation_attachment: Optional[str] = None
+    has_vapor_barrier: Optional[bool] = False
+    has_vapor_barrier_board: Optional[bool] = False
+    vapor_barrier_board_attachment: Optional[str] = None
 
 class RoofSystemUpdate(BaseModel):
     """Schema for updating a roof system."""
@@ -87,6 +100,19 @@ class RoofSystemUpdate(BaseModel):
     system_type: Optional[str] = None
     is_active: Optional[bool] = None
     sort_order: Optional[int] = None
+    manufacturer: Optional[str] = None
+    membrane_thickness: Optional[str] = None
+    field_attachment: Optional[str] = None
+    wall_flashing_thickness: Optional[str] = None
+    has_coverboard: Optional[bool] = None
+    coverboard_attachment: Optional[str] = None
+    has_top_insulation: Optional[bool] = None
+    top_insulation_attachment: Optional[str] = None
+    has_bottom_insulation: Optional[bool] = None
+    bottom_insulation_attachment: Optional[str] = None
+    has_vapor_barrier: Optional[bool] = None
+    has_vapor_barrier_board: Optional[bool] = None
+    vapor_barrier_board_attachment: Optional[str] = None
 
 class RoofSystemResponse(BaseModel):
     id: int
@@ -95,6 +121,19 @@ class RoofSystemResponse(BaseModel):
     system_type: str
     is_active: bool
     sort_order: int
+    manufacturer: Optional[str] = None
+    membrane_thickness: Optional[str] = None
+    field_attachment: Optional[str] = None
+    wall_flashing_thickness: Optional[str] = None
+    has_coverboard: Optional[bool] = False
+    coverboard_attachment: Optional[str] = None
+    has_top_insulation: Optional[bool] = False
+    top_insulation_attachment: Optional[str] = None
+    has_bottom_insulation: Optional[bool] = False
+    bottom_insulation_attachment: Optional[str] = None
+    has_vapor_barrier: Optional[bool] = False
+    has_vapor_barrier_board: Optional[bool] = False
+    vapor_barrier_board_attachment: Optional[str] = None
     created_at: datetime.datetime
 
     class Config:
@@ -554,6 +593,19 @@ def list_roof_systems(
             "system_type": s.system_type,
             "is_active": s.is_active,
             "sort_order": s.sort_order,
+            "manufacturer": s.manufacturer,
+            "membrane_thickness": s.membrane_thickness,
+            "field_attachment": s.field_attachment,
+            "wall_flashing_thickness": s.wall_flashing_thickness,
+            "has_coverboard": s.has_coverboard or False,
+            "coverboard_attachment": s.coverboard_attachment,
+            "has_top_insulation": s.has_top_insulation or False,
+            "top_insulation_attachment": s.top_insulation_attachment,
+            "has_bottom_insulation": s.has_bottom_insulation or False,
+            "bottom_insulation_attachment": s.bottom_insulation_attachment,
+            "has_vapor_barrier": s.has_vapor_barrier or False,
+            "has_vapor_barrier_board": s.has_vapor_barrier_board or False,
+            "vapor_barrier_board_attachment": s.vapor_barrier_board_attachment,
             "created_at": s.created_at,
             "conditions_count": db.query(RoofCondition).filter(
                 RoofCondition.roof_system_id == s.id
@@ -587,6 +639,19 @@ def create_roof_system(
         name=system.name,
         system_type=system.system_type,
         sort_order=existing_count,
+        manufacturer=system.manufacturer,
+        membrane_thickness=system.membrane_thickness,
+        field_attachment=system.field_attachment,
+        wall_flashing_thickness=system.wall_flashing_thickness,
+        has_coverboard=system.has_coverboard or False,
+        coverboard_attachment=system.coverboard_attachment,
+        has_top_insulation=system.has_top_insulation or False,
+        top_insulation_attachment=system.top_insulation_attachment,
+        has_bottom_insulation=system.has_bottom_insulation or False,
+        bottom_insulation_attachment=system.bottom_insulation_attachment,
+        has_vapor_barrier=system.has_vapor_barrier or False,
+        has_vapor_barrier_board=system.has_vapor_barrier_board or False,
+        vapor_barrier_board_attachment=system.vapor_barrier_board_attachment,
     )
     db.add(roof_system)
     db.flush()
@@ -646,25 +711,14 @@ def update_roof_system(
     if not db_system:
         raise HTTPException(status_code=404, detail="Roof system not found")
 
-    if system.name is not None:
-        db_system.name = system.name
-    if system.system_type is not None:
-        db_system.system_type = system.system_type
-    if system.is_active is not None:
-        db_system.is_active = system.is_active
-    if system.sort_order is not None:
-        db_system.sort_order = system.sort_order
+    # Update all provided fields dynamically
+    update_data = system.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_system, field, value)
 
     db.commit()
     db.refresh(db_system)
-    return {
-        "id": db_system.id,
-        "project_id": db_system.project_id,
-        "name": db_system.name,
-        "system_type": db_system.system_type,
-        "is_active": db_system.is_active,
-        "sort_order": db_system.sort_order,
-    }
+    return RoofSystemResponse.from_orm(db_system)
 
 
 @router.delete("/systems/{system_id}")

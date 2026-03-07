@@ -167,6 +167,34 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "roof_conditions", "roof_system_id", "INTEGER"):
         changes += 1
 
+    # ── roof_systems: specified roof system detail fields ──
+    if add_column_if_missing(engine, "roof_systems", "manufacturer", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "membrane_thickness", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "field_attachment", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "wall_flashing_thickness", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "has_coverboard", "BOOLEAN", False):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "coverboard_attachment", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "has_top_insulation", "BOOLEAN", False):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "top_insulation_attachment", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "has_bottom_insulation", "BOOLEAN", False):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "bottom_insulation_attachment", "VARCHAR"):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "has_vapor_barrier", "BOOLEAN", False):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "has_vapor_barrier_board", "BOOLEAN", False):
+        changes += 1
+    if add_column_if_missing(engine, "roof_systems", "vapor_barrier_board_attachment", "VARCHAR"):
+        changes += 1
+
     if changes:
         print(f"[migrations] Applied {changes} migration(s).")
     else:
