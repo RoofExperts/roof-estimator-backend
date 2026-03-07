@@ -143,6 +143,10 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "cost_database_items", "notes", "TEXT"):
         changes += 1
 
+    # ── condition_materials: cost_database_item_id (explicit link to cost DB) ──
+    if add_column_if_missing(engine, "condition_materials", "cost_database_item_id", "INTEGER"):
+        changes += 1
+
     # ── cost_database_items: purchase unit conversion ──
     if add_column_if_missing(engine, "cost_database_items", "purchase_unit", "VARCHAR"):
         changes += 1
