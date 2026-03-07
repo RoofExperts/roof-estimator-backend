@@ -231,6 +231,10 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
         errors = []
 
         for condition in conditions:
+            # Skip inactive conditions (system template approach)
+            if getattr(condition, 'is_active', True) is False:
+                continue
+
             materials = db.query(ConditionMaterial).filter(
                 ConditionMaterial.condition_id == condition.id
             ).order_by(ConditionMaterial.sort_order).all()
@@ -404,6 +408,7 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
         field_area = sum(
             c.measurement_value for c in conditions
             if c.condition_type == "field" and c.measurement_unit == "sqft"
+            and getattr(c, 'is_active', True) is not False
         )
         squares = field_area / 100.0
         labor_rate = 85.00  # per square

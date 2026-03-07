@@ -22,7 +22,7 @@ import io
 from database import SessionLocal
 from auth import get_current_user
 from conditions_models import (
-    RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem,
+    RoofCondition, RoofSystem, MaterialTemplate, EstimateLineItem, CostDatabaseItem,
     ConditionMaterial, CONDITION_TYPES
 )
 from models import SavedEstimate
@@ -59,6 +59,8 @@ class RoofConditionCreate(BaseModel):
     wind_zone: Optional[str] = None
     flashing_height: Optional[float] = None
     fastener_spacing: Optional[int] = None
+    is_active: bool = True
+    roof_system_id: Optional[int] = None
 
 
 class RoofConditionUpdate(BaseModel):
@@ -70,6 +72,33 @@ class RoofConditionUpdate(BaseModel):
     wind_zone: Optional[str] = None
     flashing_height: Optional[float] = None
     fastener_spacing: Optional[int] = None
+    is_active: Optional[bool] = None
+
+
+# ── Roof System Schemas ──
+class RoofSystemCreate(BaseModel):
+    """Schema for creating a roof system."""
+    name: str = "Roof Area 1"
+    system_type: str = "TPO"
+
+class RoofSystemUpdate(BaseModel):
+    """Schema for updating a roof system."""
+    name: Optional[str] = None
+    system_type: Optional[str] = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
+
+class RoofSystemResponse(BaseModel):
+    id: int
+    project_id: int
+    name: str
+    system_type: str
+    is_active: bool
+    sort_order: int
+    created_at: datetime.datetime
+
+    class Config:
+        from_attributes = True
 
 
 class ConditionMaterialCreate(BaseModel):
@@ -122,6 +151,7 @@ class RoofConditionResponse(BaseModel):
     """Schema for roof condition response."""
     id: int
     project_id: int
+    roof_system_id: Optional[int] = None
     condition_type: str
     description: Optional[str]
     measurement_value: float
@@ -129,6 +159,7 @@ class RoofConditionResponse(BaseModel):
     wind_zone: Optional[str]
     flashing_height: Optional[float] = None
     fastener_spacing: Optional[int] = None
+    is_active: bool = True
     created_at: datetime.datetime
 
     class Config:
@@ -139,6 +170,7 @@ class ConditionWithMaterialsResponse(BaseModel):
     """Condition with its nested materials."""
     id: int
     project_id: int
+    roof_system_id: Optional[int] = None
     condition_type: str
     condition_label: str  # human-readable label
     description: Optional[str]
@@ -147,6 +179,7 @@ class ConditionWithMaterialsResponse(BaseModel):
     wind_zone: Optional[str]
     flashing_height: Optional[float] = None
     fastener_spacing: Optional[int] = None
+    is_active: bool = True
     materials: List[ConditionMaterialResponse]
 
     class Config:
@@ -389,6 +422,7 @@ def list_conditions_with_materials(
         result.append({
             "id": c.id,
             "project_id": c.project_id,
+            "roof_system_id": c.roof_system_id,
             "condition_type": c.condition_type,
             "condition_label": ct_info["label"],
             "description": c.description,
@@ -397,10 +431,29 @@ def list_conditions_with_materials(
             "wind_zone": c.wind_zone,
             "flashing_height": c.flashing_height,
             "fastener_spacing": c.fastener_spacing,
+            "is_active": c.is_active if c.is_active is not None else True,
             "materials": enriched_materials,
         })
 
-    return result
+    # Also fetch roof systems for this project
+    systems = db.query(RoofSystem).filter(
+        RoofSystem.project_id == project_id
+    ).order_by(RoofSystem.sort_order).all()
+
+    return {
+        "conditions": result,
+        "systems": [
+            {
+                "id": s.id,
+                "project_id": s.project_id,
+                "name": s.name,
+                "system_type": s.system_type,
+                "is_active": s.is_active,
+                "sort_order": s.sort_order,
+            }
+            for s in systems
+        ],
+    }
 
 
 @router.get("/conditions/{condition_id}", response_model=RoofConditionResponse)
@@ -446,6 +499,8 @@ def update_condition(
         db_condition.flashing_height = condition.flashing_height
     if condition.fastener_spacing is not None:
         db_condition.fastener_spacing = condition.fastener_spacing
+    if condition.is_active is not None:
+        db_condition.is_active = condition.is_active
 
     db.commit()
     db.refresh(db_condition)
@@ -475,6 +530,170 @@ def delete_condition(
     db.delete(db_condition)
     db.commit()
     return {"message": "Condition deleted successfully"}
+
+
+# ============================================================================
+# ROOF SYSTEM ENDPOINTS
+# ============================================================================
+
+@router.get("/projects/{project_id}/systems")
+def list_roof_systems(
+    project_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """List all roof systems for a project."""
+    systems = db.query(RoofSystem).filter(
+        RoofSystem.project_id == project_id
+    ).order_by(RoofSystem.sort_order).all()
+    return [
+        {
+            "id": s.id,
+            "project_id": s.project_id,
+            "name": s.name,
+            "system_type": s.system_type,
+            "is_active": s.is_active,
+            "sort_order": s.sort_order,
+            "created_at": s.created_at,
+            "conditions_count": db.query(RoofCondition).filter(
+                RoofCondition.roof_system_id == s.id
+            ).count(),
+            "active_conditions_count": db.query(RoofCondition).filter(
+                RoofCondition.roof_system_id == s.id,
+                RoofCondition.is_active == True,
+            ).count(),
+        }
+        for s in systems
+    ]
+
+
+@router.post("/projects/{project_id}/systems")
+def create_roof_system(
+    project_id: int,
+    system: RoofSystemCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Create a new roof system for a project and instantiate all conditions from template."""
+    from system_templates import get_system_conditions
+
+    # Count existing systems for sort order
+    existing_count = db.query(RoofSystem).filter(
+        RoofSystem.project_id == project_id
+    ).count()
+
+    roof_system = RoofSystem(
+        project_id=project_id,
+        name=system.name,
+        system_type=system.system_type,
+        sort_order=existing_count,
+    )
+    db.add(roof_system)
+    db.flush()
+
+    # Create all conditions from the system template
+    template_conditions = get_system_conditions(system.system_type)
+    org_id = current_user.get("org_id", 1)
+    conditions_created = 0
+    materials_populated = 0
+
+    for tmpl in template_conditions:
+        condition = RoofCondition(
+            project_id=project_id,
+            roof_system_id=roof_system.id,
+            condition_type=tmpl["condition_type"],
+            description=tmpl["description"],
+            measurement_value=0,
+            measurement_unit=tmpl["measurement_unit"],
+            flashing_height=tmpl.get("flashing_height"),
+            fastener_spacing=tmpl.get("fastener_spacing"),
+            is_active=False,  # Start all OFF until AI maps data
+        )
+        db.add(condition)
+        db.flush()
+
+        # Populate materials from templates
+        mat_count = _populate_materials_for_condition(
+            condition, system.system_type, org_id, db
+        )
+        conditions_created += 1
+        materials_populated += mat_count
+
+    db.commit()
+    db.refresh(roof_system)
+
+    return {
+        "id": roof_system.id,
+        "project_id": roof_system.project_id,
+        "name": roof_system.name,
+        "system_type": roof_system.system_type,
+        "is_active": roof_system.is_active,
+        "sort_order": roof_system.sort_order,
+        "conditions_created": conditions_created,
+        "materials_populated": materials_populated,
+    }
+
+
+@router.put("/systems/{system_id}")
+def update_roof_system(
+    system_id: int,
+    system: RoofSystemUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update a roof system."""
+    db_system = db.query(RoofSystem).filter(RoofSystem.id == system_id).first()
+    if not db_system:
+        raise HTTPException(status_code=404, detail="Roof system not found")
+
+    if system.name is not None:
+        db_system.name = system.name
+    if system.system_type is not None:
+        db_system.system_type = system.system_type
+    if system.is_active is not None:
+        db_system.is_active = system.is_active
+    if system.sort_order is not None:
+        db_system.sort_order = system.sort_order
+
+    db.commit()
+    db.refresh(db_system)
+    return {
+        "id": db_system.id,
+        "project_id": db_system.project_id,
+        "name": db_system.name,
+        "system_type": db_system.system_type,
+        "is_active": db_system.is_active,
+        "sort_order": db_system.sort_order,
+    }
+
+
+@router.delete("/systems/{system_id}")
+def delete_roof_system(
+    system_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete a roof system and all its conditions."""
+    db_system = db.query(RoofSystem).filter(RoofSystem.id == system_id).first()
+    if not db_system:
+        raise HTTPException(status_code=404, detail="Roof system not found")
+
+    # Delete all conditions (cascade will handle materials)
+    conditions = db.query(RoofCondition).filter(
+        RoofCondition.roof_system_id == system_id
+    ).all()
+    for c in conditions:
+        db.query(EstimateLineItem).filter(
+            EstimateLineItem.condition_id == c.id
+        ).delete()
+        db.query(ConditionMaterial).filter(
+            ConditionMaterial.condition_id == c.id
+        ).delete()
+        db.delete(c)
+
+    db.delete(db_system)
+    db.commit()
+    return {"message": "Roof system deleted successfully"}
 
 
 # ============================================================================

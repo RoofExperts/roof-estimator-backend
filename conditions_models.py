@@ -15,6 +15,35 @@ import datetime
 
 
 # ============================================================================
+# ROOF SYSTEM MODEL — groups conditions into a complete roofing system
+# ============================================================================
+
+class RoofSystem(Base):
+    """
+    Represents a complete roofing system for a project area.
+
+    A project can have multiple roof systems (e.g., "Main Roof - TPO", "Lower Roof - EPDM").
+    Each system contains a full set of conditions (field, perimeter, wall flashing, etc.)
+    that can be individually toggled on/off.
+    """
+    __tablename__ = "roof_systems"
+
+    id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    name = Column(String, nullable=False, default="Roof Area 1", comment="User-friendly name")
+    system_type = Column(
+        String, nullable=False, default="TPO",
+        comment="TPO, EPDM, PVC, ModBit, BUR, StandingSeam"
+    )
+    is_active = Column(Boolean, default=True, comment="Include in estimate calculations")
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    conditions = relationship("RoofCondition", back_populates="roof_system", cascade="all, delete-orphan")
+
+
+# ============================================================================
 # CONDITION TYPES — the roof area breakouts an estimator uses
 # ============================================================================
 # Each maps to a default measurement unit and a set of material templates.
@@ -54,6 +83,10 @@ class RoofCondition(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    roof_system_id = Column(
+        Integer, ForeignKey("roof_systems.id"), nullable=True, index=True,
+        comment="FK to RoofSystem. Nullable for backward compat with existing conditions."
+    )
     condition_type = Column(
         String,
         nullable=False,
@@ -85,9 +118,15 @@ class RoofCondition(Base):
         default=12,
         comment="Fastener spacing in inches (e.g. 12 or 6). User selectable per condition."
     )
+    is_active = Column(
+        Boolean,
+        default=True,
+        comment="Whether this condition is active/included. Inactive conditions are hidden from estimate."
+    )
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     # Relationships
+    roof_system = relationship("RoofSystem", back_populates="conditions")
     estimate_items = relationship("EstimateLineItem", back_populates="condition")
     materials = relationship("ConditionMaterial", back_populates="condition", cascade="all, delete-orphan")
 

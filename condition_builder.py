@@ -18,8 +18,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from models import Project
 from conditions_models import (
-    RoofCondition, MaterialTemplate, ConditionMaterial, CostDatabaseItem, CONDITION_TYPES
+    RoofCondition, RoofSystem, MaterialTemplate, ConditionMaterial, CostDatabaseItem, CONDITION_TYPES
 )
+from system_templates import get_system_conditions
 from vision_models import RoofPlanFile, VisionExtraction
 
 
@@ -414,16 +415,17 @@ def _try_assign_insulation_products(
 
 def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> dict:
     """
-    Build conditions from spec + plan data, then auto-populate materials.
+    Build a complete Roof System with ALL conditions, then map plan data.
 
-    Steps:
+    System Template approach:
     1. Parse spec analysis to determine system type and materials
-    2. Set project.system_type from spec
-    3. Delete existing AI-generated conditions (and their materials)
-    4. Gather all plan extractions for the project
-    5. Create conditions with proper types (field, wall_flashing, roof_drain, etc.)
-    6. Auto-populate ConditionMaterial rows for each condition
-    7. Auto-generate perimeter + coping conditions if we have area but no perimeter
+    2. Create (or reuse) a RoofSystem for the project
+    3. Delete existing system conditions (clean rebuild)
+    4. Instantiate ALL conditions from the system template (all start is_active=False)
+    5. Gather plan extractions and map to matching conditions (turn them ON)
+    6. Auto-derive perimeter/wall_flashing/coping from field area
+    7. Populate materials for ALL conditions from MaterialTemplates
+    8. R-value insulation selection for field conditions
     """
     project = db.query(Project).filter(Project.id == project_id).first()
     if not project:
@@ -451,24 +453,105 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
     insulation = _safe_str(spec_data.get("insulation_type"))
     cover_board = _safe_str(spec_data.get("cover_board"))
 
-    # Step 3: Delete existing AI-generated conditions + their materials
-    existing_ai = db.query(RoofCondition).filter(
+    # Step 2: Create or reuse a RoofSystem
+    existing_system = db.query(RoofSystem).filter(
+        RoofSystem.project_id == project_id
+    ).first()
+
+    if existing_system:
+        roof_system = existing_system
+        # Update system type if changed
+        roof_system.system_type = system_type
+
+        # Step 3: Delete existing conditions for this system (clean rebuild)
+        existing_conditions = db.query(RoofCondition).filter(
+            RoofCondition.roof_system_id == roof_system.id
+        ).all()
+        if existing_conditions:
+            cond_ids = [c.id for c in existing_conditions]
+            # Null out FK references in vision_extractions
+            db.query(VisionExtraction).filter(
+                VisionExtraction.condition_id.in_(cond_ids)
+            ).update({VisionExtraction.condition_id: None}, synchronize_session=False)
+            db.flush()
+            for c in existing_conditions:
+                db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
+                db.delete(c)
+            db.flush()
+    else:
+        roof_system = RoofSystem(
+            project_id=project_id,
+            name="Roof Area 1",
+            system_type=system_type,
+        )
+        db.add(roof_system)
+        db.flush()
+
+    # Also clean up any legacy conditions (no roof_system_id) that were AI-generated
+    legacy_ai = db.query(RoofCondition).filter(
         RoofCondition.project_id == project_id,
+        RoofCondition.roof_system_id == None,
         RoofCondition.description.like("%[AI%")
     ).all()
-    if existing_ai:
-        ai_condition_ids = [c.id for c in existing_ai]
-        # Null out FK references in vision_extractions BEFORE deleting conditions
+    if legacy_ai:
+        legacy_ids = [c.id for c in legacy_ai]
         db.query(VisionExtraction).filter(
-            VisionExtraction.condition_id.in_(ai_condition_ids)
+            VisionExtraction.condition_id.in_(legacy_ids)
         ).update({VisionExtraction.condition_id: None}, synchronize_session=False)
         db.flush()
-        for c in existing_ai:
+        for c in legacy_ai:
             db.query(ConditionMaterial).filter(ConditionMaterial.condition_id == c.id).delete()
             db.delete(c)
-    db.commit()
+        db.flush()
 
-    # Step 4: Gather plan extractions
+    # Step 4: Create ALL conditions from the system template
+    template_conditions = get_system_conditions(system_type)
+    condition_map = {}  # condition_type -> RoofCondition object
+    total_materials = 0
+    created = []
+
+    for tmpl in template_conditions:
+        ct_info = CONDITION_TYPES.get(tmpl["condition_type"], {"label": tmpl["condition_type"]})
+        desc = f"[AI/{system_type}] {ct_info['label']}"
+        if tmpl["condition_type"] == "field" and insulation:
+            desc += f" | Insulation: {insulation}"
+        if tmpl["condition_type"] == "field" and cover_board:
+            desc += f" | Cover board: {cover_board}"
+
+        condition = RoofCondition(
+            project_id=project_id,
+            roof_system_id=roof_system.id,
+            condition_type=tmpl["condition_type"],
+            description=desc,
+            measurement_value=0,  # Start at 0 — AI will fill in
+            measurement_unit=tmpl["measurement_unit"],
+            wind_zone="1",
+            flashing_height=tmpl.get("flashing_height"),
+            fastener_spacing=tmpl.get("fastener_spacing"),
+            is_active=False,  # Start ALL conditions OFF
+        )
+        db.add(condition)
+        db.flush()
+
+        # Populate materials from templates for ALL conditions
+        mat_count = _populate_materials_for_condition(condition, system_type, org_id, db, spec_data)
+        total_materials += mat_count
+
+        condition_map[tmpl["condition_type"]] = condition
+        created.append({
+            "id": condition.id,
+            "type": tmpl["condition_type"],
+            "label": ct_info["label"],
+            "extraction_type": None,
+            "value": 0,
+            "unit": tmpl["measurement_unit"],
+            "description": desc,
+            "materials_count": mat_count,
+            "is_active": False,
+            "mapped_from": None,
+        })
+
+    # Step 5: Gather plan extractions and map to conditions
     plan_files = db.query(RoofPlanFile).filter(
         RoofPlanFile.project_id == project_id,
         RoofPlanFile.upload_status == "completed"
@@ -481,84 +564,11 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
         ).all()
         all_extractions.extend(exts)
 
-    # Step 5: Create conditions from extractions (or default set if no extractions)
-    created = []
-    has_field = False
-    has_perimeter = False
-    has_coping = False
-    has_wall_flashing = False
+    mapped_count = 0
     field_area = 0
-    total_materials = 0
-
-    # ── If no extractions, create a default starter set of conditions ──
-    # This follows the Edge workflow: user can always create conditions and
-    # materials auto-populate from the master template database.
-    if len(all_extractions) == 0:
-        print(f"[ConditionBuilder] No extractions found — creating default condition set")
-        default_conditions = [
-            {"type": "field",          "unit": "sqft",  "value": 0, "label": "Field of Roof"},
-            {"type": "perimeter",      "unit": "lnft",  "value": 0, "label": "Perimeter"},
-            {"type": "wall_flashing",  "unit": "lnft",  "value": 0, "label": "Wall Flashings"},
-            {"type": "coping",         "unit": "lnft",  "value": 0, "label": "Coping"},
-            {"type": "pipe_flashing",  "unit": "each",  "value": 0, "label": "Pipe Flashings"},
-            {"type": "curb",           "unit": "lnft",  "value": 0, "label": "Curbs"},
-            {"type": "roof_drain",     "unit": "each",  "value": 0, "label": "Roof Drains"},
-        ]
-        for dc in default_conditions:
-            ct_info = CONDITION_TYPES.get(dc["type"], {"label": dc["type"]})
-            desc = f"[AI/{system_type}] {ct_info['label']}"
-            if dc["type"] == "field" and insulation:
-                desc += f" | Insulation: {insulation}"
-            if dc["type"] == "field" and cover_board:
-                desc += f" | Cover board: {cover_board}"
-
-            condition = RoofCondition(
-                project_id=project_id,
-                condition_type=dc["type"],
-                description=desc,
-                measurement_value=dc["value"],
-                measurement_unit=dc["unit"],
-                wind_zone="1",
-            )
-            if dc["type"] == "wall_flashing":
-                condition.flashing_height = 60.0
-                condition.fastener_spacing = 12
-            db.add(condition)
-            db.flush()
-
-            mat_count = _populate_materials_for_condition(condition, system_type, org_id, db, spec_data)
-            total_materials += mat_count
-            created.append({
-                "id": condition.id,
-                "type": dc["type"],
-                "label": ct_info["label"],
-                "extraction_type": "default",
-                "value": dc["value"],
-                "unit": dc["unit"],
-                "description": desc,
-                "materials_count": mat_count,
-            })
-
-        db.commit()
-        return {
-            "status": "success",
-            "project_id": project_id,
-            "system_type": system_type,
-            "spec_data": {
-                "membrane": membrane_desc,
-                "thickness": thickness,
-                "attachment": attachment,
-                "insulation": insulation,
-                "cover_board": cover_board,
-                "warranty": spec_data.get("warranty_years"),
-                "manufacturer": spec_data.get("manufacturer"),
-                "target_r_value": None,
-            },
-            "conditions_created": len(created),
-            "materials_populated": total_materials,
-            "conditions": created,
-            "note": "Created default condition set (no plan extractions available). Enter measurements manually.",
-        }
+    has_perimeter_data = False
+    has_coping_data = False
+    has_wall_flashing_data = False
 
     for ext in all_extractions:
         if ext.extraction_type in SKIP_TYPES:
@@ -569,155 +579,113 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
             continue
 
         ctype = mapping["condition_type"]
-        unit = mapping["unit"]
 
-        # Track for auto-generation
-        if ctype == "field" and unit == "sqft":
-            has_field = True
-            field_area = max(field_area, ext.measurement_value)
-        if ctype == "perimeter":
-            has_perimeter = True
-        if ctype == "coping":
-            has_coping = True
-        if ctype == "wall_flashing":
-            has_wall_flashing = True
+        # Skip "custom" type — no template condition for it
+        if ctype == "custom":
+            continue
 
-        # Build description
-        ct_info = CONDITION_TYPES.get(ctype, {"label": ctype})
-        desc_parts = [f"[AI/{system_type}] {ct_info['label']}"]
+        # Find the matching condition in the system
+        condition = condition_map.get(ctype)
+        if not condition:
+            continue
+
+        # Map the extraction data to the condition
+        # For conditions that can have multiple extractions (e.g., multiple pipe flashings),
+        # add to existing measurement
+        if condition.measurement_value == 0:
+            condition.measurement_value = ext.measurement_value
+        else:
+            condition.measurement_value += ext.measurement_value
+
+        condition.is_active = True  # Turn ON conditions with data
+
+        # Update description with extraction info
+        desc_parts = [f"[AI/{system_type}] {CONDITION_TYPES.get(ctype, {}).get('label', ctype)}"]
         if ext.location_on_plan:
             desc_parts.append(ext.location_on_plan)
-        if ctype == "field" and insulation:
-            desc_parts.append(f"Insulation: {insulation}")
-        if ctype == "field" and cover_board:
-            desc_parts.append(f"Cover board: {cover_board}")
         if ext.confidence_score:
             desc_parts.append(f"confidence: {ext.confidence_score:.0%}")
-
-        description = " | ".join(desc_parts)
-
-        condition = RoofCondition(
-            project_id=project_id,
-            condition_type=ctype,
-            description=description,
-            measurement_value=ext.measurement_value,
-            measurement_unit=unit,
-            wind_zone="1",
-        )
-        db.add(condition)
-        db.flush()
+        condition.description = " | ".join(desc_parts)
 
         # Link extraction to condition
         ext.condition_id = condition.id
 
-        # Step 6: Auto-populate materials for this condition
-        mat_count = _populate_materials_for_condition(condition, system_type, org_id, db, spec_data)
-        total_materials += mat_count
+        # Track for auto-derivation
+        if ctype == "field":
+            field_area = max(field_area, condition.measurement_value)
+        if ctype == "perimeter":
+            has_perimeter_data = True
+        if ctype == "coping":
+            has_coping_data = True
+        if ctype == "wall_flashing":
+            has_wall_flashing_data = True
 
-        created.append({
-            "id": condition.id,
-            "type": ctype,
-            "label": ct_info["label"],
-            "extraction_type": ext.extraction_type,
-            "value": ext.measurement_value,
-            "unit": unit,
-            "description": description,
-            "materials_count": mat_count,
-        })
+        mapped_count += 1
 
-    # Step 7: Auto-generate perimeter if we have area but no perimeter
-    if has_field and not has_perimeter and field_area > 0:
+        # Update the created list entry
+        for entry in created:
+            if entry["type"] == ctype:
+                entry["value"] = condition.measurement_value
+                entry["is_active"] = True
+                entry["mapped_from"] = ext.extraction_type
+                entry["description"] = condition.description
+                break
+
+    # Step 6: Auto-derive perimeter/wall_flashing/coping from field area
+    if field_area > 0:
         est_perimeter = estimate_perimeter_from_area(field_area)
-        if est_perimeter > 0:
-            perim_condition = RoofCondition(
-                project_id=project_id,
-                condition_type="perimeter",
-                description=f"[AI/{system_type}] Auto-estimated perimeter from {field_area:,.0f} sqft roof area",
-                measurement_value=est_perimeter,
-                measurement_unit="lnft",
-                wind_zone="1",
-            )
-            db.add(perim_condition)
-            db.flush()
-            mat_count = _populate_materials_for_condition(perim_condition, system_type, org_id, db, spec_data)
-            total_materials += mat_count
-            created.append({
-                "id": perim_condition.id,
-                "type": "perimeter",
-                "label": "Perimeter",
-                "extraction_type": "auto_perimeter",
-                "value": est_perimeter,
-                "unit": "lnft",
-                "description": perim_condition.description,
-                "materials_count": mat_count,
-            })
-            print(f"[ConditionBuilder] Auto-generated perimeter: {est_perimeter} lnft")
 
-    # Auto-generate wall flashing from perimeter if not found
-    if has_field and not has_wall_flashing and field_area > 0:
-        est_perim = estimate_perimeter_from_area(field_area)
-        # Assume ~60% of perimeter has wall flashing
-        wall_lf = round(est_perim * 0.6)
-        if wall_lf > 0:
-            wall_condition = RoofCondition(
-                project_id=project_id,
-                condition_type="wall_flashing",
-                description=f"[AI/{system_type}] Auto-estimated wall flashing (~60% of perimeter)",
-                measurement_value=wall_lf,
-                measurement_unit="lnft",
-                wind_zone="1",
-                flashing_height=60.0,
-                fastener_spacing=12,
-            )
-            db.add(wall_condition)
-            db.flush()
-            mat_count = _populate_materials_for_condition(wall_condition, system_type, org_id, db, spec_data)
-            total_materials += mat_count
-            created.append({
-                "id": wall_condition.id,
-                "type": "wall_flashing",
-                "label": "Wall Flashings",
-                "extraction_type": "auto_wall_flashing",
-                "value": wall_lf,
-                "unit": "lnft",
-                "description": wall_condition.description,
-                "materials_count": mat_count,
-            })
+        if not has_perimeter_data and est_perimeter > 0:
+            perim = condition_map.get("perimeter")
+            if perim:
+                perim.measurement_value = est_perimeter
+                perim.is_active = True
+                perim.description = f"[AI/{system_type}] Auto-estimated from {field_area:,.0f} sqft roof area"
+                for entry in created:
+                    if entry["type"] == "perimeter":
+                        entry["value"] = est_perimeter
+                        entry["is_active"] = True
+                        entry["mapped_from"] = "auto_perimeter"
+                        break
 
-    # Auto-generate coping from perimeter if not found
-    if has_field and not has_coping and field_area > 0:
-        est_perim = estimate_perimeter_from_area(field_area)
-        if est_perim > 0:
-            coping_condition = RoofCondition(
-                project_id=project_id,
-                condition_type="coping",
-                description=f"[AI/{system_type}] Auto-estimated coping (full perimeter)",
-                measurement_value=est_perim,
-                measurement_unit="lnft",
-                wind_zone="1",
-            )
-            db.add(coping_condition)
-            db.flush()
-            mat_count = _populate_materials_for_condition(coping_condition, system_type, org_id, db, spec_data)
-            total_materials += mat_count
-            created.append({
-                "id": coping_condition.id,
-                "type": "coping",
-                "label": "Coping",
-                "extraction_type": "auto_coping",
-                "value": est_perim,
-                "unit": "lnft",
-                "description": coping_condition.description,
-                "materials_count": mat_count,
-            })
+        if not has_wall_flashing_data:
+            wall_lf = round(est_perimeter * 0.6)
+            if wall_lf > 0:
+                wall = condition_map.get("wall_flashing")
+                if wall:
+                    wall.measurement_value = wall_lf
+                    wall.is_active = True
+                    wall.description = f"[AI/{system_type}] Auto-estimated (~60% of perimeter)"
+                    for entry in created:
+                        if entry["type"] == "wall_flashing":
+                            entry["value"] = wall_lf
+                            entry["is_active"] = True
+                            entry["mapped_from"] = "auto_wall_flashing"
+                            break
+
+        if not has_coping_data and est_perimeter > 0:
+            coping = condition_map.get("coping")
+            if coping:
+                coping.measurement_value = est_perimeter
+                coping.is_active = True
+                coping.description = f"[AI/{system_type}] Auto-estimated (full perimeter)"
+                for entry in created:
+                    if entry["type"] == "coping":
+                        entry["value"] = est_perimeter
+                        entry["is_active"] = True
+                        entry["mapped_from"] = "auto_coping"
+                        break
 
     db.commit()
 
     target_r = _parse_r_value_from_spec(spec_data)
+    active_count = sum(1 for e in created if e["is_active"])
 
     return {
         "status": "success",
         "project_id": project_id,
+        "system_id": roof_system.id,
+        "system_name": roof_system.name,
         "system_type": system_type,
         "spec_data": {
             "membrane": membrane_desc,
@@ -730,6 +698,10 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
             "target_r_value": target_r if target_r > 0 else None,
         },
         "conditions_created": len(created),
+        "conditions_active": active_count,
+        "conditions_inactive": len(created) - active_count,
+        "conditions_mapped_from_plans": mapped_count,
         "materials_populated": total_materials,
         "conditions": created,
+        "note": f"Created full system with {len(created)} conditions. {active_count} mapped from plan data, {len(created) - active_count} available to enable manually.",
     }
