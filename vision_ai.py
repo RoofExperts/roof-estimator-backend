@@ -708,12 +708,23 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                         building_shape = area_result.get("building_shape", "unknown")
                         scale_used = area_result.get("scale_used", "unknown")
                         scale_text = area_result.get("scale_text_on_drawing", "unknown")
+                        dims_read = area_result.get("dimensions_read", [])
+                        area_notes = area_result.get("notes", "")
                         print(f"[Vision]   Page {page_num}: Area measurement found {len(area_measurements)} items "
                               f"(method: {method}, dims_labeled: {dims_labeled}, shape: {building_shape}, "
                               f"scale_used: {scale_used}, scale_on_drawing: {scale_text})")
+                        if dims_read:
+                            print(f"[Vision]   Page {page_num}: Dimensions read from plan: {dims_read}")
+                        if area_notes:
+                            print(f"[Vision]   Page {page_num}: Area notes: {area_notes}")
                         for am in area_measurements:
                             am["_source_page_type"] = "roof_plan"
                             am["measurement_method"] = method
+                            # Attach dimensions_read for debug visibility
+                            if dims_read:
+                                existing_notes = am.get("notes", "")
+                                dims_str = "; ".join(dims_read)
+                                am["notes"] = f"{existing_notes}; dims_read: [{dims_str}]" if existing_notes else f"dims_read: [{dims_str}]"
                         page_measurements.extend(area_measurements)
 
                         # Pixel-based validation

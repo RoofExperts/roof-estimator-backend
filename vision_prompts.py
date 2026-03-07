@@ -181,11 +181,8 @@ WHAT TO LOOK FOR ON A ROOF PLAN:
    - Sum all curb perimeters together
    - Report as "curb" with unit "lnft"
 
-6. ROOF AREA (sqft) — if dimensions are visible:
-   - If the roof plan shows overall dimensions, calculate area
-   - Report as "roof_area" with unit "sqft"
-
 COUNT CAREFULLY. Each individual drain, scupper, pitch pan, and pipe is one "each".
+DO NOT calculate or report roof_area here — roof area is measured by a separate dedicated prompt.
 
 If you find NOTHING useful, return:
 {{"measurements": [], "overall_confidence": 0.0, "notes": "No measurements found"}}
@@ -200,7 +197,7 @@ Otherwise respond with ONLY JSON:
         {{"type": "curb", "value": 48, "unit": "lnft", "confidence": 0.75, "source": "3 curbs: 2x(4x4)=32 lnft + 1x(4x4)=16 lnft", "location": "Roof plan", "notes": "Total curb perimeter from 3 HVAC curbs"}}
     ],
     "overall_confidence": 0.80,
-    "notes": "Roof plan with drains, scuppers, pitch pans, pipes, and curbs"
+    "notes": "Roof plan with drains, scuppers, pitch pans, pipes, and curbs. DO NOT include roof_area here."
 }}"""
 
 
@@ -226,15 +223,23 @@ STEP 1 — DETERMINE THE SCALE:
 - REPORT the scale you are using in your response
 
 STEP 2 — IDENTIFY THE BUILDING OUTLINE:
-- The building outline is the OUTERMOST boundary of the roof area
+- The building outline is the OUTERMOST boundary of the ROOF AREA ONLY
 - It is typically the thickest line forming a closed shape (rectangle, L-shape, T-shape, etc.)
 - Parapet walls form this outline
 - IGNORE interior lines (slope arrows, drain locations, cricket lines)
+- ONLY include areas that are ROOFED — do NOT include covered walkways, canopies, overhangs,
+  or adjacent structures unless they are clearly part of the main roof system
+- If there are multiple separate buildings or sections, only measure the MAIN BUILDING ROOF
 
-STEP 3 — MEASURE USING THE SCALE:
-Method A — If dimension lines are labeled on the plan:
-  - Read the dimension strings (e.g., "156'-8"", "94'-0"")
-  - Use these directly
+STEP 3 — READ AND REPORT ALL DIMENSIONS:
+*** CRITICAL: You MUST list EVERY dimension you read from the plan. ***
+
+Method A — If dimension lines are labeled on the plan (PREFERRED):
+  - Read EACH dimension string EXACTLY as written: "96'-0"", "80'-0"", etc.
+  - List EVERY dimension you read in your response
+  - Use these directly — do NOT apply scale conversion to labeled dimensions
+  - Labeled dimensions are ALREADY in real-world feet — they need NO conversion
+  - DOUBLE-CHECK: Read each number character by character. "96" is not "106". "80" is not "60".
 
 Method B — If NO dimensions are labeled, use the scale visually:
   - Look at the graphical scale bar length
@@ -256,48 +261,53 @@ STEP 4 — CALCULATE AREA:
 - For L-shaped buildings: Break into 2+ rectangles, calculate each, sum them
 - For T-shaped or irregular: Break into rectangles, sum areas
 - Also calculate PERIMETER = sum of all exterior edges
+- VERIFY YOUR MATH: After calculating, double-check by re-reading the dimensions
 
 STEP 5 — MEASURE PARAPET WALL AND COPING:
 - Parapet wall linear feet = building perimeter (all exterior edges)
 - Coping linear feet = same as parapet wall (coping sits on top)
 
 IMPORTANT RULES:
-- ALWAYS show your math: "156.67' × 94' = 14,727 sqft"
-- If the building has multiple sections, list each: "Section A: 120×80=9,600 + Section B: 40×30=1,200 = 10,800 total"
+- ALWAYS show your math: "96' × 80' = 7,680 sqft"
+- If the building has multiple sections, list each: "Section A: 96×80=7,680"
+- ALWAYS list every dimension you read in "dimensions_read" field
 - If dimensions are NOT labeled, state that you measured using the scale and give your confidence
 - Round dimensions to nearest half-foot
 - If you cannot determine the area with reasonable confidence, say so — do NOT guess or use a default number
+- Do NOT add sections that are not part of the roof (walkways, grade-level areas, patios)
 
 Respond with ONLY JSON:
 {{
     "measurements": [
-        {{"type": "roof_area", "value": 14727, "unit": "sqft", "confidence": 0.85, "source": "Measured from roof plan: 156.67' x 94' = 14,727 sqft", "location": "Main building footprint", "notes": "Dimensions read from labeled dimension lines on roof plan", "measurement_method": "dimension_lines"}},
-        {{"type": "parapet_wall", "value": 501, "unit": "lnft", "confidence": 0.80, "source": "Building perimeter: 2*(156.67+94) = 501 lnft", "location": "Building perimeter", "notes": "Perimeter of building footprint"}},
-        {{"type": "coping", "value": 501, "unit": "lnft", "confidence": 0.80, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
+        {{"type": "roof_area", "value": 7680, "unit": "sqft", "confidence": 0.85, "source": "Measured from roof plan: 96' x 80' = 7,680 sqft", "location": "Main building footprint", "notes": "Dimensions read from labeled dimension lines on roof plan", "measurement_method": "dimension_lines"}},
+        {{"type": "parapet_wall", "value": 352, "unit": "lnft", "confidence": 0.80, "source": "Building perimeter: 2*(96+80) = 352 lnft", "location": "Building perimeter", "notes": "Perimeter of building footprint"}},
+        {{"type": "coping", "value": 352, "unit": "lnft", "confidence": 0.80, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
     ],
     "overall_confidence": 0.80,
     "building_shape": "rectangle",
     "dimensions_labeled": true,
+    "dimensions_read": ["96'-0\" (north edge)", "80'-0\" (east edge)"],
     "measurement_method": "dimension_lines",
     "scale_used": "3/16 inch = 1 foot (1:64)",
     "scale_text_on_drawing": "3/16\" = 1'-0\"",
-    "notes": "Building dimensions clearly labeled on roof plan. Roof area calculated as length x width."
+    "notes": "Building dimensions clearly labeled on roof plan. Read 96' x 80'. Area = 96 x 80 = 7,680 sqft."
 }}
 
 If dimensions were NOT labeled and you measured using the scale:
 {{
     "measurements": [
-        {{"type": "roof_area", "value": 5183, "unit": "sqft", "confidence": 0.70, "source": "Scale-measured from roof plan using 3/16\"=1'-0\" scale: ~72' x ~72' = 5,183 sqft", "location": "Main building footprint", "notes": "Measured by comparing building outline to scale bar. Scale verified as 3/16 inch = 1 foot (1:64). Building spans approximately X scale bars wide and Y scale bars long.", "measurement_method": "scale_measurement"}},
+        {{"type": "roof_area", "value": 5183, "unit": "sqft", "confidence": 0.70, "source": "Scale-measured from roof plan using 3/16\"=1'-0\" scale: ~72' x ~72' = 5,183 sqft", "location": "Main building footprint", "notes": "Measured by comparing building outline to scale bar.", "measurement_method": "scale_measurement"}},
         {{"type": "parapet_wall", "value": 288, "unit": "lnft", "confidence": 0.65, "source": "Building perimeter: 2*(72+72) = 288 lnft", "location": "Building perimeter", "notes": "Estimated from scale measurement"}},
         {{"type": "coping", "value": 288, "unit": "lnft", "confidence": 0.65, "source": "Top of parapet walls", "location": "Building perimeter", "notes": "Same as parapet wall length"}}
     ],
     "overall_confidence": 0.70,
     "building_shape": "rectangle",
     "dimensions_labeled": false,
+    "dimensions_read": [],
     "measurement_method": "scale_measurement",
     "scale_used": "3/16 inch = 1 foot (1:64)",
     "scale_text_on_drawing": "3/16\" = 1'-0\"",
-    "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar. Scale verified as 3/16\"=1'-0\"."
+    "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar."
 }}"""
 
 
