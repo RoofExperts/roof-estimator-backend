@@ -1103,6 +1103,96 @@ def search_cost_database(
     ]
 
 
+class BulkProductItem(BaseModel):
+    material_name: str
+    manufacturer: Optional[str] = None
+    material_category: str
+    unit: str = "sqft"
+    unit_cost: float = 0.0
+    labor_cost_per_unit: Optional[float] = None
+    purchase_unit: Optional[str] = None
+    units_per_purchase: Optional[float] = None
+    product_name: Optional[str] = None
+    description: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class BulkImportRequest(BaseModel):
+    products: List[BulkProductItem]
+    as_global: bool = True  # True = global seed data, False = org-specific
+
+
+@router.post("/cost-database/bulk-import")
+def bulk_import_products(
+    request: BulkImportRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Bulk import products into the cost database.
+    Skips duplicates by material_name + manufacturer.
+    If as_global=True, creates global items (admin only).
+    If as_global=False, creates org-specific items.
+    """
+    org_id = current_user["org_id"]
+    added = 0
+    skipped = 0
+    errors = []
+
+    for p in request.products:
+        try:
+            # Check for existing item with same name + manufacturer
+            existing_query = db.query(CostDatabaseItem).filter(
+                CostDatabaseItem.material_name == p.material_name,
+            )
+            if p.manufacturer:
+                existing_query = existing_query.filter(
+                    CostDatabaseItem.manufacturer == p.manufacturer
+                )
+            if request.as_global:
+                existing_query = existing_query.filter(
+                    CostDatabaseItem.is_global == True
+                )
+            else:
+                existing_query = existing_query.filter(
+                    CostDatabaseItem.org_id == org_id
+                )
+
+            if existing_query.first():
+                skipped += 1
+                continue
+
+            item = CostDatabaseItem(
+                material_name=p.material_name,
+                manufacturer=p.manufacturer,
+                material_category=p.material_category,
+                unit=p.unit,
+                unit_cost=p.unit_cost,
+                labor_cost_per_unit=p.labor_cost_per_unit,
+                purchase_unit=p.purchase_unit,
+                units_per_purchase=p.units_per_purchase,
+                product_name=p.product_name,
+                description=p.description,
+                notes=p.notes,
+                is_active=True,
+                is_global=request.as_global,
+                org_id=None if request.as_global else org_id,
+                last_updated=datetime.datetime.utcnow()
+            )
+            db.add(item)
+            added += 1
+        except Exception as e:
+            errors.append(f"{p.material_name}: {str(e)}")
+
+    db.commit()
+    return {
+        "message": f"Bulk import complete: {added} added, {skipped} skipped (duplicates)",
+        "added": added,
+        "skipped": skipped,
+        "errors": errors
+    }
+
+
 @router.post("/cost-database/upload-pricing")
 def upload_pricing_file(
     file: UploadFile = File(...),
