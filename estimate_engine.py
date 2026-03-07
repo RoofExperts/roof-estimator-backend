@@ -46,21 +46,24 @@ def _find_cost_item(material_name: str, unit: str, org_id: int, db: Session) -> 
         )
     ]
 
-    # 1. Exact match
-    item = db.query(CostDatabaseItem).filter(
+    # 1. Exact match — prefer org-specific over global
+    items = db.query(CostDatabaseItem).filter(
         CostDatabaseItem.material_name == material_name,
         *base_filter
-    ).first()
-    if item:
-        return item
+    ).all()
+    if items:
+        # Prefer org-specific items (they have purchase_unit configured)
+        org_items = [i for i in items if i.org_id == org_id]
+        return org_items[0] if org_items else items[0]
 
-    # 2. Case-insensitive exact match
-    item = db.query(CostDatabaseItem).filter(
+    # 2. Case-insensitive exact match — prefer org-specific
+    items = db.query(CostDatabaseItem).filter(
         func.lower(CostDatabaseItem.material_name) == material_name.lower(),
         *base_filter
-    ).first()
-    if item:
-        return item
+    ).all()
+    if items:
+        org_items = [i for i in items if i.org_id == org_id]
+        return org_items[0] if org_items else items[0]
 
     # 3. Keyword-based matching
     # Break the material name into keywords and find cost items containing key terms
