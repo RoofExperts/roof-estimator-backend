@@ -155,6 +155,12 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "cost_database_items", "product_name", "TEXT"):
         changes += 1
 
+    # ── roof_conditions: is_active + roof_system_id (system template approach) ──
+    if add_column_if_missing(engine, "roof_conditions", "is_active", "BOOLEAN", True):
+        changes += 1
+    if add_column_if_missing(engine, "roof_conditions", "roof_system_id", "INTEGER"):
+        changes += 1
+
     if changes:
         print(f"[migrations] Applied {changes} migration(s).")
     else:

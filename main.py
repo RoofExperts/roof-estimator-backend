@@ -13,7 +13,7 @@ from spec_ai import analyze_spec_text_from_pdf
 from seed_data import clone_seed_for_org
 
 # Phase 1: Condition-based estimating engine
-from conditions_models import RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem, ConditionMaterial
+from conditions_models import RoofCondition, RoofSystem, MaterialTemplate, EstimateLineItem, CostDatabaseItem, ConditionMaterial
 from conditions_router import router as conditions_router
 from seed_data import seed_database
 from seed_data_generated import seed_manufacturer_products
