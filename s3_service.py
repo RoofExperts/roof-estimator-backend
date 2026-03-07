@@ -46,9 +46,31 @@ def upload_file_to_s3(file, project_id: int, folder: str):
         }
     )
 
-    # Store the S3 URL (even though we wonât use public access)
     file_url = f"https://{AWS_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
 
+    return file_url
+
+
+def upload_path_to_s3(file_path: str, project_id: int, folder: str, content_type: str = "application/pdf"):
+    """
+    Uploads a local file (by path) to S3 under:
+    projects/{project_id}/{folder}/{unique_filename}
+
+    Used for split PDF pages that are saved to temp files.
+    """
+    file_extension = file_path.rsplit(".", 1)[-1] if "." in file_path else "pdf"
+    unique_filename = f"{uuid.uuid4()}.{file_extension}"
+    s3_key = f"projects/{project_id}/{folder}/{unique_filename}"
+
+    with open(file_path, "rb") as f:
+        s3_client.upload_fileobj(
+            f,
+            AWS_BUCKET_NAME,
+            s3_key,
+            ExtraArgs={"ContentType": content_type},
+        )
+
+    file_url = f"https://{AWS_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
     return file_url
 
 # =============================

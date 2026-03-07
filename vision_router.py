@@ -15,7 +15,7 @@ from auth import get_current_user
 from database import SessionLocal
 from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction, PlanMarkup
 from conditions_models import RoofCondition, EstimateLineItem, ConditionMaterial
-from s3_service import upload_file_to_s3, download_file_from_s3
+from s3_service import upload_file_to_s3, upload_path_to_s3, download_file_from_s3
 from vision_ai import run_plan_analysis_background, auto_create_conditions
 
 # Max time an analysis can be "processing" before we consider it stuck
@@ -52,6 +52,35 @@ class SaveMarkupsRequest(BaseModel):
     markups: List[MarkupItem]
 
 
+def _split_pdf_to_pages(file_path: str) -> list:
+    """Split a multi-page PDF into individual single-page PDFs.
+
+    Returns a list of dicts: [{"page_number": 1, "path": "/tmp/.../page_1.pdf"}, ...]
+    Uses PyMuPDF (fitz) which is already installed for page conversion.
+    """
+    import fitz
+    doc = fitz.open(file_path)
+    page_count = len(doc)
+    pages = []
+
+    if page_count <= 1:
+        # Single page — no splitting needed
+        doc.close()
+        return [{"page_number": 1, "path": file_path}]
+
+    temp_dir = tempfile.mkdtemp()
+    for page_num in range(page_count):
+        single_doc = fitz.open()  # New empty PDF
+        single_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
+        page_path = os.path.join(temp_dir, f"page_{page_num + 1}.pdf")
+        single_doc.save(page_path)
+        single_doc.close()
+        pages.append({"page_number": page_num + 1, "path": page_path})
+
+    doc.close()
+    return pages
+
+
 @router.post("/projects/{project_id}/upload-plan")
 def upload_plan(
     project_id: int,
@@ -59,7 +88,11 @@ def upload_plan(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user),
 ):
-    """Upload an architectural roof plan PDF for AI vision analysis."""
+    """Upload an architectural roof plan PDF for AI vision analysis.
+
+    Multi-page PDFs are automatically split into individual single-page
+    plan files so each page gets its own scale setting and fast viewer.
+    """
     allowed_types = [".pdf"]
     file_ext = os.path.splitext(file.filename)[1].lower()
     if file_ext not in allowed_types:
@@ -68,39 +101,70 @@ def upload_plan(
             detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(allowed_types)}"
         )
 
-    s3_key = upload_file_to_s3(file, project_id, "plans")
-
-    plan_file = RoofPlanFile(
-        project_id=project_id,
-        file_name=file.filename,
-        file_type=file_ext.replace(".", ""),
-        s3_key=s3_key,
-        upload_status="pending",
-    )
-    db.add(plan_file)
-    db.commit()
-    db.refresh(plan_file)
-
+    # Save uploaded file to temp location for splitting
     temp_dir = tempfile.mkdtemp()
     temp_path = os.path.join(temp_dir, file.filename)
     file.file.seek(0)
     with open(temp_path, "wb") as f:
         f.write(file.file.read())
 
-    # Use threading.Thread instead of BackgroundTasks — BackgroundTasks gets
-    # killed on Render free tier before the analysis completes.
-    thread = threading.Thread(
-        target=run_plan_analysis_background,
-        args=(project_id, plan_file.id, temp_path),
-        daemon=False,
-    )
-    thread.start()
+    # Split into individual pages
+    try:
+        page_files = _split_pdf_to_pages(temp_path)
+    except Exception as split_err:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process PDF: {str(split_err)[:200]}"
+        )
+
+    base_name = os.path.splitext(file.filename)[0]
+    total_pages = len(page_files)
+    created_plans = []
+
+    for page_info in page_files:
+        page_num = page_info["page_number"]
+        page_path = page_info["path"]
+
+        # Name: "A300 Roof Plan - Page 1 of 5" (or just the original name for single-page)
+        if total_pages == 1:
+            display_name = file.filename
+        else:
+            display_name = f"{base_name} - Page {page_num} of {total_pages}.pdf"
+
+        # Upload this single page to S3
+        s3_key = upload_path_to_s3(page_path, project_id, "plans")
+
+        plan_file = RoofPlanFile(
+            project_id=project_id,
+            file_name=display_name,
+            file_type="pdf",
+            s3_key=s3_key,
+            upload_status="pending",
+            page_count=1,  # Each split file is always 1 page
+        )
+        db.add(plan_file)
+        db.commit()
+        db.refresh(plan_file)
+
+        # Start analysis in background thread for each page
+        thread = threading.Thread(
+            target=run_plan_analysis_background,
+            args=(project_id, plan_file.id, page_path),
+            daemon=False,
+        )
+        thread.start()
+
+        created_plans.append({
+            "plan_file_id": plan_file.id,
+            "file_name": display_name,
+            "page_number": page_num,
+            "status": "pending",
+        })
 
     return {
-        "message": "Plan uploaded. Analysis started in background.",
-        "plan_file_id": plan_file.id,
-        "status": plan_file.upload_status,
-        "file_name": file.filename,
+        "message": f"Plan uploaded and split into {total_pages} page(s). Analysis started.",
+        "total_pages": total_pages,
+        "plan_files": created_plans,
     }
 
 
@@ -374,7 +438,7 @@ def check_analysis_status(plan_file_id: int, db: Session = Depends(get_db), curr
 @router.get("/vision-version")
 def vision_version():
     """Returns the deployed code version for verification."""
-    return {"version": "v11-fix-scale-detection-high-detail", "commit": "pending"}
+    return {"version": "v12-split-pdf-on-upload", "commit": "pending"}
 
 
 @router.get("/vision-health")
