@@ -388,7 +388,7 @@ def seed_cost_database(db: Session):
     c("Insulation Fasteners", "Carlisle", "fastener", "each", 0.18, 0.10,
       "Box", 500, "HD Fastener #15 (500ct)")
     c("Insulation Plates", "Carlisle", "fastener", "each", 0.12, 0.05,
-      "Box", 500, "3in Insulation Plates (500ct)")
+      "Box", 1000, "3in Insulation Plates (1000ct)")
 
     # ── Membrane Fasteners & Plates ──
     c("Membrane Fasteners (screws)", "Carlisle", "fastener", "each", 0.22, 0.10,
@@ -550,7 +550,7 @@ def update_global_purchase_units(db: Session):
         ("base sheet (if needed)", "sqft"): ("Roll", 1000, "Fiberglass Base Sheet 3x333"),
         # Fasteners
         ("insulation fasteners", "each"): ("Box", 500, "HD Fastener #15 (500ct)"),
-        ("insulation plates", "each"): ("Box", 500, "3in Insulation Plates (500ct)"),
+        ("insulation plates", "each"): ("Box", 1000, "3in Insulation Plates (1000ct)"),
         ("membrane fasteners (screws)", "each"): ("Box", 500, "Membrane Screw #14 (500ct)"),
         ("membrane plates (seam plates)", "each"): ("Box", 1000, "Seam Plates (1000ct)"),
         ("membrane screws & seam plates", "each"): ("Box", 500, "Membrane Screw + Plate Kit (500ct)"),
@@ -769,6 +769,23 @@ def migrate_consolidate_perimeter_bar(db: Session):
         print("[migrate] Perimeter Bar already consolidated. Skipping.")
 
 
+def migrate_fix_insulation_plates_packaging(db: Session):
+    """Fix 3in Insulation Plates: 1000/box not 500/box."""
+    from conditions_models import CostDatabaseItem
+    updated = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == "Insulation Plates",
+        CostDatabaseItem.units_per_purchase == 500
+    ).update({
+        "units_per_purchase": 1000,
+        "product_name": "3in Insulation Plates (1000ct)"
+    }, synchronize_session=False)
+    if updated:
+        db.commit()
+        print(f"[migrate] Fixed Insulation Plates packaging: {updated} items updated to 1000/box")
+    else:
+        print("[migrate] Insulation Plates packaging already correct. Skipping.")
+
+
 def seed_database(db: Session):
     """Run all seed functions."""
     print("Starting database seed...")
@@ -778,5 +795,6 @@ def seed_database(db: Session):
     update_global_purchase_units(db)
     # Run migrations
     migrate_consolidate_perimeter_bar(db)
+    migrate_fix_insulation_plates_packaging(db)
     db.commit()
     print("Database seeding complete.")
