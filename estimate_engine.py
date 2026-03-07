@@ -15,7 +15,7 @@ Flow:
 """
 
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 from conditions_models import (
     RoofCondition, MaterialTemplate, EstimateLineItem, CostDatabaseItem,
     ConditionMaterial, CONDITION_TYPES
@@ -23,6 +23,76 @@ from conditions_models import (
 from models import Project
 from typing import Dict, List, Optional
 import json
+
+
+# ============================================================================
+# HELPER: SMART COST LOOKUP WITH FALLBACK MATCHING
+# ============================================================================
+
+def _find_cost_item(material_name: str, unit: str, org_id: int, db: Session) -> "CostDatabaseItem":
+    """
+    Smart cost lookup with fallback matching:
+    1. Exact match on material_name
+    2. Case-insensitive match
+    3. Keyword-based match (longest overlap wins)
+
+    Returns the best matching CostDatabaseItem or None.
+    """
+    base_filter = [
+        CostDatabaseItem.is_active == True,
+        or_(
+            CostDatabaseItem.org_id == org_id,
+            CostDatabaseItem.is_global == True
+        )
+    ]
+
+    # 1. Exact match
+    item = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == material_name,
+        *base_filter
+    ).first()
+    if item:
+        return item
+
+    # 2. Case-insensitive exact match
+    item = db.query(CostDatabaseItem).filter(
+        func.lower(CostDatabaseItem.material_name) == material_name.lower(),
+        *base_filter
+    ).first()
+    if item:
+        return item
+
+    # 3. Keyword-based matching
+    # Break the material name into keywords and find cost items containing key terms
+    keywords = [w.lower() for w in material_name.split() if len(w) > 2]
+    # Remove filler words
+    filler = {"the", "and", "for", "per", "layer", "top", "bottom"}
+    keywords = [k for k in keywords if k not in filler]
+
+    if not keywords:
+        return None
+
+    # Get all active cost items for this org
+    all_items = db.query(CostDatabaseItem).filter(*base_filter).all()
+
+    best_match = None
+    best_score = 0
+
+    for ci in all_items:
+        ci_lower = ci.material_name.lower()
+        ci_words = set(w.lower() for w in ci.material_name.split() if len(w) > 2)
+
+        # Score: number of matching keywords + bonus for unit match
+        score = sum(1 for k in keywords if k in ci_lower or k in ci_words)
+        # Bonus for unit match
+        if ci.unit and unit and ci.unit.lower() == unit.lower():
+            score += 0.5
+
+        if score > best_score and score >= max(1, len(keywords) * 0.4):
+            best_score = score
+            best_match = ci
+
+    return best_match
 
 
 # ============================================================================
@@ -174,15 +244,10 @@ def calculate_estimate(project_id: int, db: Session) -> Dict:
 
                 qty = _calculate_quantity(condition, mat)
 
-                # Look up cost
-                cost_item = db.query(CostDatabaseItem).filter(
-                    CostDatabaseItem.material_name == mat.material_name,
-                    CostDatabaseItem.is_active == True,
-                    or_(
-                        CostDatabaseItem.org_id == project.org_id,
-                        CostDatabaseItem.is_global == True
-                    )
-                ).first()
+                # Look up cost (smart matching with fallback)
+                cost_item = _find_cost_item(
+                    mat.material_name, mat.unit, project.org_id, db
+                )
 
                 unit_cost = 0.0
                 labor_cost = 0.0
