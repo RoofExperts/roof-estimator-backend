@@ -1193,6 +1193,66 @@ def bulk_import_products(
     }
 
 
+@router.post("/cost-database/seed-manufacturer-products")
+def seed_manufacturer_products(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    One-time seed of manufacturer-specific products from the bundled JSON file.
+    Reads manufacturer_products.json and creates global CostDatabaseItem entries.
+    Skips duplicates by material_name + manufacturer.
+    """
+    import json
+    import os
+
+    json_path = os.path.join(os.path.dirname(__file__), "manufacturer_products.json")
+    if not os.path.exists(json_path):
+        raise HTTPException(status_code=404, detail="manufacturer_products.json not found")
+
+    with open(json_path, "r") as f:
+        products = json.load(f)
+
+    added = 0
+    skipped = 0
+    for p in products:
+        existing = db.query(CostDatabaseItem).filter(
+            CostDatabaseItem.material_name == p["material_name"],
+            CostDatabaseItem.is_global == True
+        ).first()
+        if existing:
+            skipped += 1
+            continue
+
+        item = CostDatabaseItem(
+            material_name=p["material_name"],
+            manufacturer=p.get("manufacturer"),
+            material_category=p.get("material_category", "accessory"),
+            unit=p.get("unit", "sqft"),
+            unit_cost=p.get("unit_cost", 0),
+            labor_cost_per_unit=p.get("labor_cost_per_unit"),
+            purchase_unit=p.get("purchase_unit"),
+            units_per_purchase=p.get("units_per_purchase"),
+            product_name=p.get("product_name"),
+            description=p.get("description"),
+            notes=p.get("notes"),
+            is_active=True,
+            is_global=True,
+            org_id=None,
+            last_updated=datetime.datetime.utcnow()
+        )
+        db.add(item)
+        added += 1
+
+    db.commit()
+    return {
+        "message": f"Manufacturer products seeded: {added} added, {skipped} already existed",
+        "added": added,
+        "skipped": skipped,
+        "total_in_file": len(products)
+    }
+
+
 @router.post("/cost-database/upload-pricing")
 def upload_pricing_file(
     file: UploadFile = File(...),
