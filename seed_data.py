@@ -23,7 +23,7 @@ Scuppers:       waterblock (1 tube) → metal_scupper_box (1)
 
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
-from conditions_models import MaterialTemplate, CostDatabaseItem
+from conditions_models import MaterialTemplate, CostDatabaseItem, SystemTemplateCondition
 
 
 def seed_material_templates(db: Session):
@@ -855,11 +855,47 @@ def migrate_consolidate_sealants(db: Session):
         print("[migrate] Sealants already consolidated. Skipping.")
 
 
+def seed_system_template_conditions(db: Session):
+    """
+    Seed global system template conditions for all system types.
+    These are the platform defaults that Company Admins can customize per-org.
+    Idempotent — skips if global rows already exist for a system type.
+    """
+    from system_templates import SINGLE_PLY_CONDITIONS, SYSTEM_TEMPLATES
+
+    for system_type in SYSTEM_TEMPLATES.keys():
+        existing = db.query(SystemTemplateCondition).filter(
+            SystemTemplateCondition.is_global == True,
+            SystemTemplateCondition.system_type == system_type,
+        ).count()
+        if existing > 0:
+            continue
+
+        print(f"[seed] Seeding global system template conditions for {system_type}...")
+        for cond in SINGLE_PLY_CONDITIONS:
+            row = SystemTemplateCondition(
+                org_id=None,
+                system_type=system_type,
+                condition_type=cond["condition_type"],
+                description=cond["description"],
+                measurement_unit=cond["measurement_unit"],
+                flashing_height=cond.get("flashing_height"),
+                fastener_spacing=cond.get("fastener_spacing"),
+                sort_order=cond["sort_order"],
+                is_global=True,
+                is_active=True,
+            )
+            db.add(row)
+        db.flush()
+        print(f"[seed] Seeded {len(SINGLE_PLY_CONDITIONS)} conditions for {system_type}.")
+
+
 def seed_database(db: Session):
     """Run all seed functions."""
     print("Starting database seed...")
     seed_material_templates(db)
     seed_cost_database(db)
+    seed_system_template_conditions(db)
     # Always ensure global items have purchase_unit data
     update_global_purchase_units(db)
     # Run migrations

@@ -146,6 +146,51 @@ SYSTEM_TEMPLATES = {
 }
 
 
-def get_system_conditions(system_type: str):
-    """Return the condition template list for a given system type."""
+def get_system_conditions(system_type: str, org_id: int = None, db=None):
+    """
+    Return the condition template list for a given system type.
+
+    Priority:
+    1. Org-specific DB rows (if org_id + db provided and rows exist)
+    2. Global DB rows (seeded defaults)
+    3. Hardcoded SINGLE_PLY_CONDITIONS (backward compat fallback)
+    """
+    if db is not None:
+        from conditions_models import SystemTemplateCondition
+
+        # 1. Check for org-specific template
+        if org_id:
+            org_rows = db.query(SystemTemplateCondition).filter(
+                SystemTemplateCondition.org_id == org_id,
+                SystemTemplateCondition.system_type == system_type,
+                SystemTemplateCondition.is_active == True,
+            ).order_by(SystemTemplateCondition.sort_order).all()
+
+            if org_rows:
+                return [_row_to_dict(r) for r in org_rows]
+
+        # 2. Fall back to global defaults from DB
+        global_rows = db.query(SystemTemplateCondition).filter(
+            SystemTemplateCondition.org_id == None,
+            SystemTemplateCondition.is_global == True,
+            SystemTemplateCondition.system_type == system_type,
+            SystemTemplateCondition.is_active == True,
+        ).order_by(SystemTemplateCondition.sort_order).all()
+
+        if global_rows:
+            return [_row_to_dict(r) for r in global_rows]
+
+    # 3. Hardcoded fallback (no DB available or no rows seeded yet)
     return SYSTEM_TEMPLATES.get(system_type, SINGLE_PLY_CONDITIONS)
+
+
+def _row_to_dict(row):
+    """Convert a SystemTemplateCondition row to the dict format used by condition_builder."""
+    return {
+        "condition_type": row.condition_type,
+        "measurement_unit": row.measurement_unit,
+        "description": row.description,
+        "flashing_height": row.flashing_height,
+        "fastener_spacing": row.fastener_spacing,
+        "sort_order": row.sort_order,
+    }

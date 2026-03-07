@@ -12,6 +12,7 @@ import traceback
 
 from database import get_db
 from models import CompanySettings
+from conditions_models import SystemTemplateCondition
 from s3_service import upload_file_to_s3, s3_client, AWS_BUCKET_NAME
 from auth import get_current_user
 
@@ -264,3 +265,252 @@ def delete_company_logo(db: Session = Depends(get_db), current_user: dict = Depe
     db.commit()
 
     return {"message": "Logo removed successfully"}
+
+
+# ============================================================================
+# SYSTEM TEMPLATE MANAGEMENT
+# ============================================================================
+
+class SystemTemplateConditionCreate(BaseModel):
+    condition_type: str
+    description: Optional[str] = None
+    measurement_unit: str = "sqft"
+    flashing_height: Optional[float] = None
+    fastener_spacing: Optional[int] = None
+    sort_order: Optional[int] = None
+
+
+class SystemTemplateConditionUpdate(BaseModel):
+    condition_type: Optional[str] = None
+    description: Optional[str] = None
+    measurement_unit: Optional[str] = None
+    flashing_height: Optional[float] = None
+    fastener_spacing: Optional[int] = None
+    sort_order: Optional[int] = None
+
+
+class SystemTemplateReorder(BaseModel):
+    condition_ids: List[int]
+
+
+def _ensure_org_template(system_type: str, org_id: int, db: Session):
+    """
+    Lazy clone: if the org has no custom template for this system type,
+    clone the global defaults into org-specific rows. Returns the org rows.
+    """
+    org_rows = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.org_id == org_id,
+        SystemTemplateCondition.system_type == system_type,
+    ).order_by(SystemTemplateCondition.sort_order).all()
+
+    if org_rows:
+        return org_rows
+
+    # Clone from global
+    global_rows = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.org_id == None,
+        SystemTemplateCondition.is_global == True,
+        SystemTemplateCondition.system_type == system_type,
+        SystemTemplateCondition.is_active == True,
+    ).order_by(SystemTemplateCondition.sort_order).all()
+
+    cloned = []
+    for g in global_rows:
+        row = SystemTemplateCondition(
+            org_id=org_id,
+            system_type=system_type,
+            condition_type=g.condition_type,
+            description=g.description,
+            measurement_unit=g.measurement_unit,
+            flashing_height=g.flashing_height,
+            fastener_spacing=g.fastener_spacing,
+            sort_order=g.sort_order,
+            is_global=False,
+            is_active=True,
+        )
+        db.add(row)
+        cloned.append(row)
+
+    db.flush()
+    return cloned
+
+
+def _template_row_to_dict(row: SystemTemplateCondition) -> dict:
+    return {
+        "id": row.id,
+        "condition_type": row.condition_type,
+        "description": row.description,
+        "measurement_unit": row.measurement_unit,
+        "flashing_height": row.flashing_height,
+        "fastener_spacing": row.fastener_spacing,
+        "sort_order": row.sort_order,
+        "is_global": row.is_global,
+        "is_active": row.is_active,
+    }
+
+
+@admin_router.get("/system-templates/{system_type}")
+def get_system_template(
+    system_type: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Get the system template for a given type. Returns org-specific if exists, else global defaults."""
+    org_id = current_user["org_id"]
+
+    # Check for org-specific template first
+    org_rows = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.org_id == org_id,
+        SystemTemplateCondition.system_type == system_type,
+        SystemTemplateCondition.is_active == True,
+    ).order_by(SystemTemplateCondition.sort_order).all()
+
+    if org_rows:
+        return {
+            "system_type": system_type,
+            "is_custom": True,
+            "conditions": [_template_row_to_dict(r) for r in org_rows],
+        }
+
+    # Fall back to global
+    global_rows = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.org_id == None,
+        SystemTemplateCondition.is_global == True,
+        SystemTemplateCondition.system_type == system_type,
+        SystemTemplateCondition.is_active == True,
+    ).order_by(SystemTemplateCondition.sort_order).all()
+
+    return {
+        "system_type": system_type,
+        "is_custom": False,
+        "conditions": [_template_row_to_dict(r) for r in global_rows],
+    }
+
+
+@admin_router.post("/system-templates/{system_type}/conditions")
+def add_template_condition(
+    system_type: str,
+    body: SystemTemplateConditionCreate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Add a condition to the org's system template. Auto-clones global on first edit."""
+    org_id = current_user["org_id"]
+    org_rows = _ensure_org_template(system_type, org_id, db)
+
+    # Check for duplicate condition_type
+    existing_types = {r.condition_type for r in org_rows}
+    if body.condition_type in existing_types:
+        raise HTTPException(status_code=400, detail=f"Condition '{body.condition_type}' already exists in template")
+
+    # Determine sort_order
+    max_sort = max((r.sort_order for r in org_rows), default=0)
+    sort_order = body.sort_order if body.sort_order is not None else max_sort + 1
+
+    row = SystemTemplateCondition(
+        org_id=org_id,
+        system_type=system_type,
+        condition_type=body.condition_type,
+        description=body.description or body.condition_type.replace("_", " ").title(),
+        measurement_unit=body.measurement_unit,
+        flashing_height=body.flashing_height,
+        fastener_spacing=body.fastener_spacing,
+        sort_order=sort_order,
+        is_global=False,
+        is_active=True,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    return _template_row_to_dict(row)
+
+
+@admin_router.put("/system-templates/{system_type}/conditions/{condition_id}")
+def update_template_condition(
+    system_type: str,
+    condition_id: int,
+    body: SystemTemplateConditionUpdate,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Update a condition in the org's system template."""
+    org_id = current_user["org_id"]
+
+    row = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.id == condition_id,
+        SystemTemplateCondition.org_id == org_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Template condition not found")
+
+    for field in ["condition_type", "description", "measurement_unit", "flashing_height", "fastener_spacing", "sort_order"]:
+        value = getattr(body, field, None)
+        if value is not None:
+            setattr(row, field, value)
+
+    db.commit()
+    db.refresh(row)
+    return _template_row_to_dict(row)
+
+
+@admin_router.delete("/system-templates/{system_type}/conditions/{condition_id}")
+def delete_template_condition(
+    system_type: str,
+    condition_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Remove a condition from the org's system template."""
+    org_id = current_user["org_id"]
+
+    row = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.id == condition_id,
+        SystemTemplateCondition.org_id == org_id,
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Template condition not found")
+
+    db.delete(row)
+    db.commit()
+    return {"message": f"Removed '{row.condition_type}' from {system_type} template"}
+
+
+@admin_router.put("/system-templates/{system_type}/reorder")
+def reorder_template_conditions(
+    system_type: str,
+    body: SystemTemplateReorder,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Bulk reorder conditions in the org's system template."""
+    org_id = current_user["org_id"]
+
+    for idx, cond_id in enumerate(body.condition_ids):
+        row = db.query(SystemTemplateCondition).filter(
+            SystemTemplateCondition.id == cond_id,
+            SystemTemplateCondition.org_id == org_id,
+        ).first()
+        if row:
+            row.sort_order = idx + 1
+
+    db.commit()
+    return {"message": "Reorder complete"}
+
+
+@admin_router.post("/system-templates/{system_type}/reset")
+def reset_template_to_defaults(
+    system_type: str,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Delete all org-specific template conditions, reverting to global defaults."""
+    org_id = current_user["org_id"]
+
+    deleted = db.query(SystemTemplateCondition).filter(
+        SystemTemplateCondition.org_id == org_id,
+        SystemTemplateCondition.system_type == system_type,
+    ).delete()
+
+    db.commit()
+    return {"message": f"Reset {system_type} template to defaults. Removed {deleted} custom conditions."}

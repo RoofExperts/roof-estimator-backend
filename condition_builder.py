@@ -233,6 +233,11 @@ def _populate_materials_for_condition(
 
     added = 0
     for tmpl in deduped:
+        # Try to match to a cost database item for explicit pricing link
+        cost_item_id = _find_cost_database_item_id(
+            tmpl.material_name, tmpl.unit, org_id, db
+        )
+
         cm = ConditionMaterial(
             condition_id=condition.id,
             material_template_id=tmpl.id,
@@ -245,6 +250,7 @@ def _populate_materials_for_condition(
             is_included=not tmpl.is_optional,   # Optional items start toggled OFF
             sort_order=tmpl.sort_order,          # Preserve build-up stack order
             notes=_build_material_notes(tmpl, spec_data),
+            cost_database_item_id=cost_item_id,
         )
         db.add(cm)
         added += 1
@@ -254,6 +260,36 @@ def _populate_materials_for_condition(
         _try_assign_insulation_products(condition, spec_data, org_id, db)
 
     return added
+
+
+def _find_cost_database_item_id(material_name: str, unit: str, org_id: int, db: Session) -> int:
+    """
+    Find the best matching CostDatabaseItem for a material name + unit.
+    Returns the item ID or None if no match found.
+    Checks org-specific items first, then global items.
+    """
+    # Try exact name + unit match (org-specific first)
+    if org_id:
+        org_item = db.query(CostDatabaseItem).filter(
+            CostDatabaseItem.material_name == material_name,
+            CostDatabaseItem.unit == unit,
+            CostDatabaseItem.org_id == org_id,
+            CostDatabaseItem.is_active == True,
+        ).first()
+        if org_item:
+            return org_item.id
+
+    # Try global match
+    global_item = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.material_name == material_name,
+        CostDatabaseItem.unit == unit,
+        CostDatabaseItem.is_global == True,
+        CostDatabaseItem.is_active == True,
+    ).first()
+    if global_item:
+        return global_item.id
+
+    return None
 
 
 def _build_material_notes(tmpl: MaterialTemplate, spec_data: dict) -> str:
@@ -506,8 +542,8 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
             db.delete(c)
         db.flush()
 
-    # Step 4: Create ALL conditions from the system template
-    template_conditions = get_system_conditions(system_type)
+    # Step 4: Create ALL conditions from the system template (org-specific or global)
+    template_conditions = get_system_conditions(system_type, org_id=org_id, db=db)
     condition_map = {}  # condition_type -> RoofCondition object
     total_materials = 0
     created = []

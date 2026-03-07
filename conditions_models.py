@@ -6,6 +6,7 @@ This module defines SQLAlchemy models for the condition-based roofing estimation
 - MaterialTemplate: Defines materials and coverage rates for each condition type
 - EstimateLineItem: Calculated line items for project estimates
 - CostDatabaseItem: Internal pricing database for materials and labor
+- SystemTemplateCondition: Org-customizable system template conditions
 """
 
 from sqlalchemy import Column, Integer, String, Float, DateTime, Boolean, Text, ForeignKey
@@ -317,3 +318,44 @@ class CostDatabaseItem(Base):
                                 comment="Base units per purchase unit (e.g., 1000 SF per Roll)")
     product_name = Column(String, nullable=True,
                           comment="Full product name for takeoff (e.g., 'TPO 60mil White 10x100')")
+
+
+# ============================================================================
+# SYSTEM TEMPLATE CONDITION MODEL
+# ============================================================================
+
+class SystemTemplateCondition(Base):
+    """
+    Defines which conditions are included in a system template.
+
+    Global rows (org_id=NULL, is_global=True) are the platform defaults (seeded from
+    the hardcoded 15 condition types). Org-specific rows (org_id=X) allow Company Admins
+    to customize their template — adding custom conditions (e.g., "vents"), removing
+    unused ones, or changing defaults.
+
+    When Smart Build runs, it checks for org-specific rows first, falls back to global.
+    """
+    __tablename__ = "system_template_conditions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    org_id = Column(Integer, ForeignKey("organizations.id"), nullable=True, index=True,
+                    comment="NULL + is_global=True = platform default template")
+    system_type = Column(String, nullable=False, index=True,
+                         comment="TPO, EPDM, PVC, ModBit, BUR, StandingSeam")
+    condition_type = Column(String, nullable=False, index=True,
+                            comment="field, perimeter, vents, custom name, etc.")
+    description = Column(String, nullable=True,
+                         comment="Human-friendly label, e.g. 'Field of Roof', 'Roof Vents'")
+    measurement_unit = Column(String, default="sqft",
+                              comment="sqft, lnft, each")
+    flashing_height = Column(Float, nullable=True,
+                             comment="Default flashing height in inches")
+    fastener_spacing = Column(Integer, nullable=True,
+                              comment="Default fastener spacing in inches")
+    sort_order = Column(Integer, default=0,
+                        comment="Display order in the system template")
+    is_global = Column(Boolean, default=False, index=True,
+                       comment="True = shared platform default")
+    is_active = Column(Boolean, default=True,
+                       comment="Soft delete / disable")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
