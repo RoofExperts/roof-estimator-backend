@@ -60,8 +60,8 @@ def parse_spec_data(project: Project) -> dict:
 
 def detect_system_from_spec(spec_data: dict) -> str:
     """Determine TPO/EPDM/PVC from spec data. Returns system name."""
-    membrane = (spec_data.get("membrane_type") or "").upper()
-    system = (spec_data.get("system_type") or "").upper()
+    membrane = _safe_str(spec_data.get("membrane_type")).upper()
+    system = _safe_str(spec_data.get("system_type")).upper()
     combined = membrane + " " + system
 
     if "EPDM" in combined:
@@ -71,7 +71,7 @@ def detect_system_from_spec(spec_data: dict) -> str:
     if "TPO" in combined:
         return "TPO"
 
-    mfr = (spec_data.get("manufacturer") or "").upper()
+    mfr = _safe_str(spec_data.get("manufacturer")).upper()
     if "FIRESTONE" in mfr:
         return "EPDM"
     if "SARNAFIL" in mfr or "SIKA" in mfr:
@@ -231,11 +231,11 @@ def _build_material_notes(tmpl: MaterialTemplate, spec_data: dict) -> str:
     cat = tmpl.material_category
 
     if cat == "insulation" and spec_data.get("insulation_type"):
-        notes_parts.append(f"Spec: {spec_data['insulation_type']}")
+        notes_parts.append(f"Spec: {_safe_str(spec_data['insulation_type'])}")
     if cat == "membrane" and spec_data.get("membrane_thickness"):
-        notes_parts.append(f"Spec: {spec_data['membrane_thickness']}")
+        notes_parts.append(f"Spec: {_safe_str(spec_data['membrane_thickness'])}")
     if cat in ("fastener", "adhesive") and spec_data.get("attachment_method"):
-        notes_parts.append(f"Spec: {spec_data['attachment_method']}")
+        notes_parts.append(f"Spec: {_safe_str(spec_data['attachment_method'])}")
 
     return " | ".join(notes_parts) if notes_parts else None
 
@@ -252,14 +252,28 @@ def _parse_r_value_from_notes(notes: str) -> float:
     return float(match.group(1)) if match else 0.0
 
 
+def _safe_str(value) -> str:
+    """Safely convert a spec value to string for regex matching.
+    Handles cases where GPT returns dicts/lists instead of strings."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    return str(value)
+
+
 def _parse_r_value_from_spec(spec_data: dict) -> float:
     """
     Try to extract a target R-value from the spec data.
     Specs often say things like 'R-30 minimum' in insulation_layers or special_requirements.
     """
     for field in ("insulation_layers", "special_requirements", "insulation_type"):
-        text = spec_data.get(field) or ""
-        match = re.search(r'R-?(\d+\.?\d*)', text, re.IGNORECASE)
+        text = _safe_str(spec_data.get(field))
+        if not text:
+            continue
+        match = re.search(r'R[-_]?(\d+\.?\d*)', text, re.IGNORECASE)
         if match:
             return float(match.group(1))
     return 0.0
@@ -280,7 +294,7 @@ def _try_assign_insulation_products(
     if target_r <= 0:
         return
 
-    insulation_type = (spec_data.get("insulation_type") or "").lower()
+    insulation_type = _safe_str(spec_data.get("insulation_type")).lower()
 
     # Determine preferred insulation category from spec
     preferred_keywords = []
@@ -401,11 +415,11 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
     db.commit()
     print(f"[ConditionBuilder] Project {project_id} system: {system_type}")
 
-    membrane_desc = spec_data.get("membrane_type") or system_type
-    thickness = spec_data.get("membrane_thickness") or ""
-    attachment = spec_data.get("attachment_method") or ""
-    insulation = spec_data.get("insulation_type") or ""
-    cover_board = spec_data.get("cover_board") or ""
+    membrane_desc = _safe_str(spec_data.get("membrane_type")) or system_type
+    thickness = _safe_str(spec_data.get("membrane_thickness"))
+    attachment = _safe_str(spec_data.get("attachment_method"))
+    insulation = _safe_str(spec_data.get("insulation_type"))
+    cover_board = _safe_str(spec_data.get("cover_board"))
 
     # Step 3: Delete existing AI-generated conditions + their materials
     existing_ai = db.query(RoofCondition).filter(
