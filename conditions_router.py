@@ -28,7 +28,7 @@ from conditions_models import (
 from models import SavedEstimate
 from estimate_engine import calculate_estimate, get_estimate_summary
 from estimate_engine import get_available_condition_types, get_materials_for_condition
-from condition_builder import smart_build_conditions
+from condition_builder import smart_build_conditions, _populate_materials_for_condition
 from takeoff_engine import generate_takeoff
 
 
@@ -255,7 +255,9 @@ def create_condition(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Add a new roof condition to a project."""
+    """Add a new roof condition to a project and auto-populate materials from templates."""
+    from models import Project
+
     roof_condition = RoofCondition(
         project_id=project_id,
         condition_type=condition.condition_type,
@@ -267,6 +269,15 @@ def create_condition(
         fastener_spacing=condition.fastener_spacing,
     )
     db.add(roof_condition)
+    db.flush()  # Get the condition ID
+
+    # ── Auto-populate materials from templates (Edge workflow) ──
+    project = db.query(Project).filter(Project.id == project_id).first()
+    system_type = (project.system_type or "TPO") if project else "TPO"
+    org_id = current_user.get("org_id", 1)
+    mat_count = _populate_materials_for_condition(roof_condition, system_type, org_id, db)
+    print(f"[CreateCondition] Auto-populated {mat_count} materials for {condition.condition_type}")
+
     db.commit()
     db.refresh(roof_condition)
     return roof_condition

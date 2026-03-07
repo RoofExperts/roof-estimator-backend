@@ -451,7 +451,7 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
         ).all()
         all_extractions.extend(exts)
 
-    # Step 5: Create conditions from extractions
+    # Step 5: Create conditions from extractions (or default set if no extractions)
     created = []
     has_field = False
     has_perimeter = False
@@ -459,6 +459,76 @@ def smart_build_conditions(project_id: int, db: Session, org_id: int = None) -> 
     has_wall_flashing = False
     field_area = 0
     total_materials = 0
+
+    # ── If no extractions, create a default starter set of conditions ──
+    # This follows the Edge workflow: user can always create conditions and
+    # materials auto-populate from the master template database.
+    if len(all_extractions) == 0:
+        print(f"[ConditionBuilder] No extractions found — creating default condition set")
+        default_conditions = [
+            {"type": "field",          "unit": "sqft",  "value": 0, "label": "Field of Roof"},
+            {"type": "perimeter",      "unit": "lnft",  "value": 0, "label": "Perimeter"},
+            {"type": "wall_flashing",  "unit": "lnft",  "value": 0, "label": "Wall Flashings"},
+            {"type": "coping",         "unit": "lnft",  "value": 0, "label": "Coping"},
+            {"type": "pipe_flashing",  "unit": "each",  "value": 0, "label": "Pipe Flashings"},
+            {"type": "curb",           "unit": "lnft",  "value": 0, "label": "Curbs"},
+            {"type": "roof_drain",     "unit": "each",  "value": 0, "label": "Roof Drains"},
+        ]
+        for dc in default_conditions:
+            ct_info = CONDITION_TYPES.get(dc["type"], {"label": dc["type"]})
+            desc = f"[AI/{system_type}] {ct_info['label']}"
+            if dc["type"] == "field" and insulation:
+                desc += f" | Insulation: {insulation}"
+            if dc["type"] == "field" and cover_board:
+                desc += f" | Cover board: {cover_board}"
+
+            condition = RoofCondition(
+                project_id=project_id,
+                condition_type=dc["type"],
+                description=desc,
+                measurement_value=dc["value"],
+                measurement_unit=dc["unit"],
+                wind_zone="1",
+            )
+            if dc["type"] == "wall_flashing":
+                condition.flashing_height = 60.0
+                condition.fastener_spacing = 12
+            db.add(condition)
+            db.flush()
+
+            mat_count = _populate_materials_for_condition(condition, system_type, org_id, db, spec_data)
+            total_materials += mat_count
+            created.append({
+                "id": condition.id,
+                "type": dc["type"],
+                "label": ct_info["label"],
+                "extraction_type": "default",
+                "value": dc["value"],
+                "unit": dc["unit"],
+                "description": desc,
+                "materials_count": mat_count,
+            })
+
+        db.commit()
+        return {
+            "status": "success",
+            "project_id": project_id,
+            "system_type": system_type,
+            "spec_data": {
+                "membrane": membrane_desc,
+                "thickness": thickness,
+                "attachment": attachment,
+                "insulation": insulation,
+                "cover_board": cover_board,
+                "warranty": spec_data.get("warranty_years"),
+                "manufacturer": spec_data.get("manufacturer"),
+                "target_r_value": None,
+            },
+            "conditions_created": len(created),
+            "materials_populated": total_materials,
+            "conditions": created,
+            "note": "Created default condition set (no plan extractions available). Enter measurements manually.",
+        }
 
     for ext in all_extractions:
         if ext.extraction_type in SKIP_TYPES:
