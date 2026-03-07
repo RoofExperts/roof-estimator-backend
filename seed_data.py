@@ -349,113 +349,269 @@ def seed_cost_database(db: Session):
 
     items = []
 
-    def c(name, mfr, cat, unit, cost, labor=None):
+    # Helper: name, manufacturer, category, unit, cost, labor,
+    #         purchase_unit, units_per_purchase, product_name
+    def c(name, mfr, cat, unit, cost, labor=None,
+          p_unit=None, p_per=None, p_name=None):
         items.append(CostDatabaseItem(
             material_name=name, manufacturer=mfr,
             material_category=cat, unit=unit,
             unit_cost=cost, labor_cost_per_unit=labor, is_active=True,
-            org_id=None, is_global=True
+            org_id=None, is_global=True,
+            purchase_unit=p_unit, units_per_purchase=p_per,
+            product_name=p_name
         ))
 
     # ── Membranes ──
-    c("TPO Membrane", "Carlisle", "membrane", "sqft", 0.85, 0.75)
-    c("TPO Membrane", "GAF", "membrane", "sqft", 0.82, 0.75)
-    c("EPDM Membrane", "Carlisle", "membrane", "sqft", 0.65, 0.70)
-    c("PVC Membrane", "Carlisle", "membrane", "sqft", 1.10, 0.80)
-    c("PVC Membrane", "GAF", "membrane", "sqft", 1.05, 0.80)
+    c("TPO Membrane", "Carlisle", "membrane", "sqft", 0.85, 0.75,
+      "Roll", 1000, "TPO 60mil White 10x100")
+    c("TPO Membrane", "GAF", "membrane", "sqft", 0.82, 0.75,
+      "Roll", 1000, "GAF EverGuard TPO 60mil 10x100")
+    c("EPDM Membrane", "Carlisle", "membrane", "sqft", 0.65, 0.70,
+      "Roll", 1000, "EPDM 60mil Black 10x100")
+    c("PVC Membrane", "Carlisle", "membrane", "sqft", 1.10, 0.80,
+      "Roll", 1000, "PVC 60mil White 10x100")
+    c("PVC Membrane", "GAF", "membrane", "sqft", 1.05, 0.80,
+      "Roll", 1000, "GAF EverGuard PVC 60mil 10x100")
 
-    # ── Insulation (placeholder costs — updated from spreadsheets) ──
-    c("Bottom Insulation Layer", "TBD", "insulation", "sqft", 0.55, 0.30)
-    c("Top Insulation Layer", "TBD", "insulation", "sqft", 0.55, 0.30)
-    c("Coverboard", "TBD", "coverboard", "sqft", 0.45, 0.25)
-    c("Base Sheet (if needed)", "TBD", "base_sheet", "sqft", 0.35, 0.25)
+    # ── Insulation ──
+    c("Bottom Insulation Layer", "TBD", "insulation", "sqft", 0.55, 0.30,
+      "Pcs", 32, "Polyiso 2.6in 4x8 (R-15)")
+    c("Top Insulation Layer", "TBD", "insulation", "sqft", 0.55, 0.30,
+      "Pcs", 32, "Polyiso 1.5in 4x8 (R-8.6)")
+    c("Coverboard", "TBD", "coverboard", "sqft", 0.45, 0.25,
+      "Pcs", 32, "HD Coverboard 0.5in 4x8")
+    c("Base Sheet (if needed)", "TBD", "base_sheet", "sqft", 0.35, 0.25,
+      "Roll", 1000, "Fiberglass Base Sheet 3x333")
 
     # ── Insulation Fasteners & Plates ──
-    c("Insulation Fasteners", "Carlisle", "fastener", "each", 0.18, 0.10)
-    c("Insulation Plates", "Carlisle", "fastener", "each", 0.12, 0.05)
+    c("Insulation Fasteners", "Carlisle", "fastener", "each", 0.18, 0.10,
+      "Box", 500, "HD Fastener #15 (500ct)")
+    c("Insulation Plates", "Carlisle", "fastener", "each", 0.12, 0.05,
+      "Box", 500, "3in Insulation Plates (500ct)")
 
     # ── Membrane Fasteners & Plates ──
-    c("Membrane Fasteners (screws)", "Carlisle", "fastener", "each", 0.22, 0.10)
-    c("Membrane Plates (seam plates)", "Carlisle", "fastener", "each", 0.15, 0.08)
-    c("Membrane Screws & Seam Plates", "Carlisle", "fastener", "each", 0.35, 0.15)
-    c("Membrane Screws & Plates", "Carlisle", "fastener", "each", 0.35, 0.15)
+    c("Membrane Fasteners (screws)", "Carlisle", "fastener", "each", 0.22, 0.10,
+      "Box", 500, "Membrane Screw #14 (500ct)")
+    c("Membrane Plates (seam plates)", "Carlisle", "fastener", "each", 0.15, 0.08,
+      "Box", 1000, "Seam Plates (1000ct)")
+    c("Membrane Screws & Seam Plates", "Carlisle", "fastener", "each", 0.35, 0.15,
+      "Box", 500, "Membrane Screw + Plate Kit (500ct)")
+    c("Membrane Screws & Plates", "Carlisle", "fastener", "each", 0.35, 0.15,
+      "Box", 500, "Membrane Screw + Plate Kit (500ct)")
 
     # ── Adhesives ──
-    c("TPO Bonding Adhesive", "Carlisle", "adhesive", "gallon", 20.00, 5.00)
-    c("EPDM Bonding Adhesive", "Carlisle", "adhesive", "gallon", 22.00, 5.00)
-    c("PVC Bonding Adhesive", "Carlisle", "adhesive", "gallon", 24.00, 5.00)
+    c("TPO Bonding Adhesive", "Carlisle", "adhesive", "gallon", 20.00, 5.00,
+      "Pail", 5, "TPO Bonding Adhesive 5-Gal Pail")
+    c("EPDM Bonding Adhesive", "Carlisle", "adhesive", "gallon", 22.00, 5.00,
+      "Pail", 5, "EPDM Bonding Adhesive 5-Gal Pail")
+    c("PVC Bonding Adhesive", "Carlisle", "adhesive", "gallon", 24.00, 5.00,
+      "Pail", 5, "PVC Bonding Adhesive 5-Gal Pail")
 
     # ── Sealants ──
-    c("Waterblock Sealant", "Carlisle", "sealant", "each", 12.50, 3.00)
-    c("All Purpose Sealant", "Carlisle", "sealant", "each", 8.50, 2.00)
-    c("Polyurethane Sealant", "Tremco", "sealant", "gallon", 35.00, 8.00)
-    c("Pourable Sealer", "Carlisle", "sealant", "each", 18.00, 5.00)
+    c("Waterblock Sealant", "Carlisle", "sealant", "each", 12.50, 3.00,
+      "Tube", 1, "Waterblock Sealant 10.3oz Tube")
+    c("All Purpose Sealant", "Carlisle", "sealant", "each", 8.50, 2.00,
+      "Tube", 1, "All Purpose Sealant 10.3oz Tube")
+    c("Polyurethane Sealant", "Tremco", "sealant", "gallon", 35.00, 8.00,
+      "Pail", 1.5, "Polyurethane Sealant 1.5-Gal")
+    c("Pourable Sealer", "Carlisle", "sealant", "each", 18.00, 5.00,
+      "Tube", 1, "Pourable Sealer 28oz Tube")
 
     # ── Primers ──
-    c("TPO Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00)
-    c("EPDM Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00)
-    c("PVC Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00)
+    c("TPO Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00,
+      "Pail", 5, "TPO Primer 5-Gal Pail")
+    c("EPDM Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00,
+      "Pail", 5, "EPDM Primer 5-Gal Pail")
+    c("PVC Primer", "Carlisle", "adhesive", "gallon", 28.00, 5.00,
+      "Pail", 5, "PVC Primer 5-Gal Pail")
 
     # ── Flashing ──
-    c("Pipe Boot Flashing", "Portals Plus", "flashing", "each", 12.00, 15.00)
-    c("Corner Flashing (Aluminum)", "Tremco", "flashing", "lnft", 2.50, 3.50)
-    c("Metal Edge Flashing (24ga)", "Metal Era", "flashing", "lnft", 3.50, 2.50)
-    c("Drip Edge (Aluminum)", "Metal Era", "flashing", "lnft", 2.25, 2.00)
-    c("Metal Scupper Box", "Metal Era", "flashing", "each", 45.00, 25.00)
+    c("Pipe Boot Flashing", "Portals Plus", "flashing", "each", 12.00, 15.00,
+      "EA", 1, "Pipe Boot Flashing (each)")
+    c("Corner Flashing (Aluminum)", "Tremco", "flashing", "lnft", 2.50, 3.50,
+      "Pcs", 10, "Corner Flashing 24ga 10ft Pcs")
+    c("Metal Edge Flashing (24ga)", "Metal Era", "flashing", "lnft", 3.50, 2.50,
+      "Sticks", 10, "Edge Flashing 24ga 10ft Sticks")
+    c("Drip Edge (Aluminum)", "Metal Era", "flashing", "lnft", 2.25, 2.00,
+      "Sticks", 10, "Drip Edge Aluminum 10ft Sticks")
+    c("Metal Scupper Box", "Metal Era", "flashing", "each", 45.00, 25.00,
+      "EA", 1, "Metal Scupper Box (each)")
 
     # ── Accessories ──
-    c("Termination Bar", "Metal Era", "accessory", "lnft", 1.50, 1.25)
-    c("Termination Bar Fasteners", "Carlisle", "fastener", "each", 0.22, 0.08)
-    c("Premolded Sealant Pocket", "Portals Plus", "accessory", "each", 22.00, 20.00)
-    c("Perimeter Bar (Aluminum)", "Metal Era", "accessory", "lnft", 1.75, 1.50)
-    c("Perimeter Fasteners", "OMG", "fastener", "each", 0.35, 0.15)
-    c("Corner Fasteners", "OMG", "fastener", "each", 0.35, 0.15)
-    c("Edge Fasteners", "OMG", "fastener", "each", 0.25, 0.12)
-    c("Transition Fasteners", "OMG", "fastener", "each", 0.25, 0.12)
-    c("Expansion Joint Cover", "Tremco", "accessory", "lnft", 8.50, 6.00)
+    c("Termination Bar", "Metal Era", "accessory", "lnft", 1.50, 1.25,
+      "Sticks", 10, "Termination Bar 10ft Sticks")
+    c("Termination Bar Fasteners", "Carlisle", "fastener", "each", 0.22, 0.08,
+      "Box", 500, "Term Bar Fasteners (500ct)")
+    c("Premolded Sealant Pocket", "Portals Plus", "accessory", "each", 22.00, 20.00,
+      "EA", 1, "Premolded Sealant Pocket (each)")
+    c("Perimeter Bar (Aluminum)", "Metal Era", "accessory", "lnft", 1.75, 1.50,
+      "Sticks", 10, "Perimeter Bar Aluminum 10ft Sticks")
+    c("Perimeter Fasteners", "OMG", "fastener", "each", 0.35, 0.15,
+      "Box", 500, "Perimeter Fasteners (500ct)")
+    c("Corner Fasteners", "OMG", "fastener", "each", 0.35, 0.15,
+      "Box", 500, "Corner Fasteners (500ct)")
+    c("Edge Fasteners", "OMG", "fastener", "each", 0.25, 0.12,
+      "Box", 500, "Edge Fasteners (500ct)")
+    c("Transition Fasteners", "OMG", "fastener", "each", 0.25, 0.12,
+      "Box", 500, "Transition Fasteners (500ct)")
+    c("Expansion Joint Cover", "Tremco", "accessory", "lnft", 8.50, 6.00,
+      "Sticks", 10, "Expansion Joint Cover 10ft Sticks")
 
     # ── Coping ──
-    c("Coping Metal (24ga)", "Metal Era", "flashing", "lnft", 6.50, 4.00)
-    c("Coping Fasteners", "OMG", "fastener", "each", 0.25, 0.12)
+    c("Coping Metal (24ga)", "Metal Era", "flashing", "lnft", 6.50, 4.00,
+      "Sticks", 10, "Coping Metal 24ga 10ft Sticks")
+    c("Coping Fasteners", "OMG", "fastener", "each", 0.25, 0.12,
+      "Box", 500, "Coping Fasteners (500ct)")
 
     # ── Mod Bit ──
-    c("SBS Mod Bit Cap Sheet", "GAF", "membrane", "sqft", 0.95, 0.85)
-    c("Mod Bit Base Sheet", "GAF", "membrane", "sqft", 0.55, 0.45)
-    c("Hot Asphalt (Type III)", "Building Products", "adhesive", "gallon", 8.50, 3.00)
-    c("Mod Bit Primer", "GAF", "adhesive", "gallon", 28.00, 5.00)
-    c("Mod Bit Mastic", "GAF", "sealant", "gallon", 32.00, 8.00)
-    c("Mod Bit Edge Strip", "GAF", "membrane", "lnft", 1.20, 0.90)
+    c("SBS Mod Bit Cap Sheet", "GAF", "membrane", "sqft", 0.95, 0.85,
+      "Roll", 100, "SBS Mod Bit Cap Sheet 3x33.3")
+    c("Mod Bit Base Sheet", "GAF", "membrane", "sqft", 0.55, 0.45,
+      "Roll", 100, "Mod Bit Base Sheet 3x33.3")
+    c("Hot Asphalt (Type III)", "Building Products", "adhesive", "gallon", 8.50, 3.00,
+      "Pail", 5, "Hot Asphalt Type III 5-Gal")
+    c("Mod Bit Primer", "GAF", "adhesive", "gallon", 28.00, 5.00,
+      "Pail", 5, "Mod Bit Primer 5-Gal Pail")
+    c("Mod Bit Mastic", "GAF", "sealant", "gallon", 32.00, 8.00,
+      "Pail", 5, "Mod Bit Mastic 5-Gal Pail")
+    c("Mod Bit Edge Strip", "GAF", "membrane", "lnft", 1.20, 0.90,
+      "Roll", 50, "Mod Bit Edge Strip 50ft Roll")
 
     # ── BUR ──
-    c("Fiberglass Felt Ply (Type IV)", "Johns Manville", "membrane", "sqft", 0.18, 0.30)
+    c("Fiberglass Felt Ply (Type IV)", "Johns Manville", "membrane", "sqft", 0.18, 0.30,
+      "Roll", 432, "Type IV Felt 36in x 144ft")
     c("BUR Flood Coat (Gravel)", "Building Products", "accessory", "sqft", 0.12, 0.20)
     c("Roofing Gravel (#4 Aggregate)", "Local Supply", "accessory", "sqft", 0.08, 0.15)
-    c("BUR Mastic", "Johns Manville", "sealant", "gallon", 30.00, 8.00)
-    c("BUR Edge Strip Ply", "Johns Manville", "membrane", "lnft", 0.55, 0.40)
+    c("BUR Mastic", "Johns Manville", "sealant", "gallon", 30.00, 8.00,
+      "Pail", 5, "BUR Mastic 5-Gal Pail")
+    c("BUR Edge Strip Ply", "Johns Manville", "membrane", "lnft", 0.55, 0.40,
+      "Roll", 50, "BUR Edge Strip 50ft Roll")
 
     # ── Standing Seam Metal ──
-    c("24ga Standing Seam Panel (Galvalume)", "MBCI", "membrane", "sqft", 3.85, 2.50)
-    c("Standing Seam Clip (Fixed)", "MBCI", "fastener", "each", 0.65, 0.20)
-    c("Standing Seam Clip (Floating)", "MBCI", "fastener", "each", 0.85, 0.20)
-    c("Panel Screw (#12x1.5)", "OMG", "fastener", "each", 0.08, 0.05)
-    c("Underlayment (Synthetic)", "GAF", "accessory", "sqft", 0.12, 0.10)
-    c("Eave Trim (24ga)", "MBCI", "flashing", "lnft", 4.50, 3.00)
-    c("Gable Trim (24ga)", "MBCI", "flashing", "lnft", 4.50, 3.00)
-    c("Hip/Valley Flashing (24ga)", "MBCI", "flashing", "lnft", 5.00, 4.00)
-    c("Pipe Boot (Metal)", "Portals Plus", "flashing", "each", 16.00, 15.00)
-    c("Metal Sealant (Butyl)", "Tremco", "sealant", "gallon", 28.00, 6.00)
-    c("Ridge Cap (24ga)", "MBCI", "flashing", "lnft", 6.00, 4.00)
-    c("Ridge Vent (Continuous)", "Lomanco", "accessory", "lnft", 3.50, 2.00)
-    c("Transition Flashing (24ga)", "MBCI", "flashing", "lnft", 5.50, 4.00)
+    c("24ga Standing Seam Panel (Galvalume)", "MBCI", "membrane", "sqft", 3.85, 2.50,
+      "Panel", 30, "24ga Standing Seam Panel 2x15ft")
+    c("Standing Seam Clip (Fixed)", "MBCI", "fastener", "each", 0.65, 0.20,
+      "Box", 100, "Fixed Clip (100ct)")
+    c("Standing Seam Clip (Floating)", "MBCI", "fastener", "each", 0.85, 0.20,
+      "Box", 100, "Floating Clip (100ct)")
+    c("Panel Screw (#12x1.5)", "OMG", "fastener", "each", 0.08, 0.05,
+      "Box", 250, "Panel Screws #12x1.5 (250ct)")
+    c("Underlayment (Synthetic)", "GAF", "accessory", "sqft", 0.12, 0.10,
+      "Roll", 1000, "Synthetic Underlayment 10x100")
+    c("Eave Trim (24ga)", "MBCI", "flashing", "lnft", 4.50, 3.00,
+      "Sticks", 10, "Eave Trim 24ga 10ft Sticks")
+    c("Gable Trim (24ga)", "MBCI", "flashing", "lnft", 4.50, 3.00,
+      "Sticks", 10, "Gable Trim 24ga 10ft Sticks")
+    c("Hip/Valley Flashing (24ga)", "MBCI", "flashing", "lnft", 5.00, 4.00,
+      "Sticks", 10, "Hip/Valley Flashing 24ga 10ft Sticks")
+    c("Pipe Boot (Metal)", "Portals Plus", "flashing", "each", 16.00, 15.00,
+      "EA", 1, "Metal Pipe Boot (each)")
+    c("Metal Sealant (Butyl)", "Tremco", "sealant", "gallon", 28.00, 6.00,
+      "Pail", 5, "Butyl Sealant 5-Gal Pail")
+    c("Ridge Cap (24ga)", "MBCI", "flashing", "lnft", 6.00, 4.00,
+      "Sticks", 10, "Ridge Cap 24ga 10ft Sticks")
+    c("Ridge Vent (Continuous)", "Lomanco", "accessory", "lnft", 3.50, 2.00,
+      "Sticks", 4, "Ridge Vent 4ft Sections")
+    c("Transition Flashing (24ga)", "MBCI", "flashing", "lnft", 5.50, 4.00,
+      "Sticks", 10, "Transition Flashing 24ga 10ft Sticks")
 
     # ── Membrane strips (for edge/perimeter) ──
-    c("TPO Strip (6in)", "Carlisle", "membrane", "lnft", 0.75, 0.50)
-    c("EPDM Edge Strip", "Carlisle", "membrane", "lnft", 1.10, 0.90)
-    c("PVC Edge Strip", "Carlisle", "membrane", "lnft", 1.40, 1.00)
+    c("TPO Strip (6in)", "Carlisle", "membrane", "lnft", 0.75, 0.50,
+      "Roll", 100, "TPO Strip 6in x 100ft")
+    c("EPDM Edge Strip", "Carlisle", "membrane", "lnft", 1.10, 0.90,
+      "Roll", 100, "EPDM Edge Strip 100ft Roll")
+    c("PVC Edge Strip", "Carlisle", "membrane", "lnft", 1.40, 1.00,
+      "Roll", 100, "PVC Edge Strip 100ft Roll")
+
+    # ── Vapor Barrier ──
+    c("Vapor Barrier", "TBD", "accessory", "sqft", 0.15, 0.10,
+      "Roll", 1000, "Vapor Barrier 10x100")
 
     db.add_all(items)
     db.commit()
     print(f"Seeded {len(items)} global cost database items.")
+
+
+def update_global_purchase_units(db: Session):
+    """
+    Update existing global cost items with purchase_unit data.
+    Called on startup or manually to backfill purchase units on items
+    that were seeded before purchase_unit columns existed.
+    """
+    # Build a lookup of purchase_unit data from the seed definitions
+    purchase_data = {
+        # Membranes
+        ("tpo membrane", "sqft"): ("Roll", 1000, "TPO 60mil White 10x100"),
+        ("epdm membrane", "sqft"): ("Roll", 1000, "EPDM 60mil Black 10x100"),
+        ("pvc membrane", "sqft"): ("Roll", 1000, "PVC 60mil White 10x100"),
+        # Insulation
+        ("bottom insulation layer", "sqft"): ("Pcs", 32, "Polyiso 2.6in 4x8 (R-15)"),
+        ("top insulation layer", "sqft"): ("Pcs", 32, "Polyiso 1.5in 4x8 (R-8.6)"),
+        ("coverboard", "sqft"): ("Pcs", 32, "HD Coverboard 0.5in 4x8"),
+        ("base sheet (if needed)", "sqft"): ("Roll", 1000, "Fiberglass Base Sheet 3x333"),
+        # Fasteners
+        ("insulation fasteners", "each"): ("Box", 500, "HD Fastener #15 (500ct)"),
+        ("insulation plates", "each"): ("Box", 500, "3in Insulation Plates (500ct)"),
+        ("membrane fasteners (screws)", "each"): ("Box", 500, "Membrane Screw #14 (500ct)"),
+        ("membrane plates (seam plates)", "each"): ("Box", 1000, "Seam Plates (1000ct)"),
+        ("membrane screws & seam plates", "each"): ("Box", 500, "Membrane Screw + Plate Kit (500ct)"),
+        ("membrane screws & plates", "each"): ("Box", 500, "Membrane Screw + Plate Kit (500ct)"),
+        # Adhesives
+        ("tpo bonding adhesive", "gallon"): ("Pail", 5, "TPO Bonding Adhesive 5-Gal Pail"),
+        ("epdm bonding adhesive", "gallon"): ("Pail", 5, "EPDM Bonding Adhesive 5-Gal Pail"),
+        ("pvc bonding adhesive", "gallon"): ("Pail", 5, "PVC Bonding Adhesive 5-Gal Pail"),
+        # Sealants
+        ("waterblock sealant", "each"): ("Tube", 1, "Waterblock Sealant 10.3oz Tube"),
+        ("all purpose sealant", "each"): ("Tube", 1, "All Purpose Sealant 10.3oz Tube"),
+        ("polyurethane sealant", "gallon"): ("Pail", 1.5, "Polyurethane Sealant 1.5-Gal"),
+        ("pourable sealer", "each"): ("Tube", 1, "Pourable Sealer 28oz Tube"),
+        # Primers
+        ("tpo primer", "gallon"): ("Pail", 5, "TPO Primer 5-Gal Pail"),
+        ("epdm primer", "gallon"): ("Pail", 5, "EPDM Primer 5-Gal Pail"),
+        ("pvc primer", "gallon"): ("Pail", 5, "PVC Primer 5-Gal Pail"),
+        # Flashing
+        ("pipe boot flashing", "each"): ("EA", 1, "Pipe Boot Flashing (each)"),
+        ("corner flashing (aluminum)", "lnft"): ("Pcs", 10, "Corner Flashing 24ga 10ft Pcs"),
+        ("metal edge flashing (24ga)", "lnft"): ("Sticks", 10, "Edge Flashing 24ga 10ft Sticks"),
+        ("drip edge (aluminum)", "lnft"): ("Sticks", 10, "Drip Edge Aluminum 10ft Sticks"),
+        ("metal scupper box", "each"): ("EA", 1, "Metal Scupper Box (each)"),
+        # Accessories
+        ("termination bar", "lnft"): ("Sticks", 10, "Termination Bar 10ft Sticks"),
+        ("termination bar fasteners", "each"): ("Box", 500, "Term Bar Fasteners (500ct)"),
+        ("premolded sealant pocket", "each"): ("EA", 1, "Premolded Sealant Pocket (each)"),
+        ("perimeter bar (aluminum)", "lnft"): ("Sticks", 10, "Perimeter Bar Aluminum 10ft Sticks"),
+        ("perimeter fasteners", "each"): ("Box", 500, "Perimeter Fasteners (500ct)"),
+        ("corner fasteners", "each"): ("Box", 500, "Corner Fasteners (500ct)"),
+        ("edge fasteners", "each"): ("Box", 500, "Edge Fasteners (500ct)"),
+        ("transition fasteners", "each"): ("Box", 500, "Transition Fasteners (500ct)"),
+        ("expansion joint cover", "lnft"): ("Sticks", 10, "Expansion Joint Cover 10ft Sticks"),
+        # Coping
+        ("coping metal (24ga)", "lnft"): ("Sticks", 10, "Coping Metal 24ga 10ft Sticks"),
+        ("coping fasteners", "each"): ("Box", 500, "Coping Fasteners (500ct)"),
+        # Vapor Barrier
+        ("vapor barrier", "sqft"): ("Roll", 1000, "Vapor Barrier 10x100"),
+    }
+
+    global_items = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_global == True
+    ).all()
+
+    updated = 0
+    for item in global_items:
+        key = (item.material_name.lower().strip(), (item.unit or "").lower().strip())
+        if key in purchase_data:
+            p_unit, p_per, p_name = purchase_data[key]
+            if item.purchase_unit != p_unit or item.units_per_purchase != p_per:
+                item.purchase_unit = p_unit
+                item.units_per_purchase = p_per
+                item.product_name = p_name
+                updated += 1
+
+    if updated:
+        db.flush()
+    print(f"[seed] Updated {updated} global items with purchase_unit data")
+    return updated
 
 
 def clone_seed_for_org(org_id: int, db: Session):
@@ -502,6 +658,9 @@ def clone_seed_for_org(org_id: int, db: Session):
             unit=c.unit,
             unit_cost=c.unit_cost,
             labor_cost_per_unit=c.labor_cost_per_unit,
+            purchase_unit=c.purchase_unit,
+            units_per_purchase=c.units_per_purchase,
+            product_name=c.product_name,
             is_active=True,
             org_id=org_id,
             is_global=False,
@@ -514,9 +673,83 @@ def clone_seed_for_org(org_id: int, db: Session):
     return {"templates": cloned_templates, "cost_items": cloned_costs}
 
 
+def resync_cost_items_for_org(org_id: int, db: Session, update_pricing: bool = False):
+    """
+    Re-sync an existing org's cost database from global platform defaults.
+    - Any global item missing from the org gets cloned in.
+    - If update_pricing=True, also updates pricing + purchase_unit on existing items.
+    - Org-created custom items are never touched.
+    """
+    global_costs = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_global == True,
+        CostDatabaseItem.is_active == True
+    ).all()
+
+    org_costs = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.org_id == org_id,
+        CostDatabaseItem.is_global == False
+    ).all()
+
+    # Index org items by (lower material_name, lower unit)
+    org_index = {}
+    for oc in org_costs:
+        key = (oc.material_name.lower().strip(), (oc.unit or "").lower().strip())
+        if key not in org_index:
+            org_index[key] = oc
+
+    added = 0
+    updated = 0
+
+    for gc in global_costs:
+        key = (gc.material_name.lower().strip(), (gc.unit or "").lower().strip())
+
+        if key not in org_index:
+            # Missing — clone it in
+            new_c = CostDatabaseItem(
+                material_name=gc.material_name,
+                manufacturer=gc.manufacturer,
+                material_category=gc.material_category,
+                unit=gc.unit,
+                unit_cost=gc.unit_cost,
+                labor_cost_per_unit=gc.labor_cost_per_unit,
+                purchase_unit=gc.purchase_unit,
+                units_per_purchase=gc.units_per_purchase,
+                product_name=gc.product_name,
+                is_active=True,
+                org_id=org_id,
+                is_global=False,
+            )
+            db.add(new_c)
+            added += 1
+        else:
+            # Exists — optionally update purchase_unit info + pricing
+            existing = org_index[key]
+            if update_pricing:
+                existing.unit_cost = gc.unit_cost
+                existing.labor_cost_per_unit = gc.labor_cost_per_unit
+            # Always sync purchase unit data if the org item doesn't have it yet
+            if not existing.purchase_unit and gc.purchase_unit:
+                existing.purchase_unit = gc.purchase_unit
+                existing.units_per_purchase = gc.units_per_purchase
+                existing.product_name = gc.product_name
+                updated += 1
+            elif update_pricing and gc.purchase_unit:
+                existing.purchase_unit = gc.purchase_unit
+                existing.units_per_purchase = gc.units_per_purchase
+                existing.product_name = gc.product_name
+                updated += 1
+
+    db.flush()
+    print(f"[resync] Org {org_id}: added {added}, updated {updated} cost items")
+    return {"added": added, "updated": updated}
+
+
 def seed_database(db: Session):
     """Run all seed functions."""
     print("Starting database seed...")
     seed_material_templates(db)
     seed_cost_database(db)
+    # Always ensure global items have purchase_unit data
+    update_global_purchase_units(db)
+    db.commit()
     print("Database seeding complete.")

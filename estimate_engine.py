@@ -38,45 +38,38 @@ def _find_cost_item(material_name: str, unit: str, org_id: int, db: Session) -> 
 
     Returns the best matching CostDatabaseItem or None.
     """
-    base_filter = [
+    # Primary: org-specific items only (each org has its own cloned cost DB)
+    org_filter = [
         CostDatabaseItem.is_active == True,
-        or_(
-            CostDatabaseItem.org_id == org_id,
-            CostDatabaseItem.is_global == True
-        )
+        CostDatabaseItem.org_id == org_id
     ]
 
-    # 1. Exact match — prefer org-specific over global
-    items = db.query(CostDatabaseItem).filter(
+    # 1. Exact match on org items
+    item = db.query(CostDatabaseItem).filter(
         CostDatabaseItem.material_name == material_name,
-        *base_filter
-    ).all()
-    if items:
-        # Prefer org-specific items (they have purchase_unit configured)
-        org_items = [i for i in items if i.org_id == org_id]
-        return org_items[0] if org_items else items[0]
+        *org_filter
+    ).first()
+    if item:
+        return item
 
-    # 2. Case-insensitive exact match — prefer org-specific
-    items = db.query(CostDatabaseItem).filter(
+    # 2. Case-insensitive exact match on org items
+    item = db.query(CostDatabaseItem).filter(
         func.lower(CostDatabaseItem.material_name) == material_name.lower(),
-        *base_filter
-    ).all()
-    if items:
-        org_items = [i for i in items if i.org_id == org_id]
-        return org_items[0] if org_items else items[0]
+        *org_filter
+    ).first()
+    if item:
+        return item
 
-    # 3. Keyword-based matching
-    # Break the material name into keywords and find cost items containing key terms
+    # 3. Keyword-based fuzzy match on org items
     keywords = [w.lower() for w in material_name.split() if len(w) > 2]
-    # Remove filler words
     filler = {"the", "and", "for", "per", "layer", "top", "bottom"}
     keywords = [k for k in keywords if k not in filler]
 
     if not keywords:
-        return None
+        # Fallback: try global items as last resort
+        return _find_global_fallback(material_name, unit, db)
 
-    # Get all active cost items for this org
-    all_items = db.query(CostDatabaseItem).filter(*base_filter).all()
+    all_items = db.query(CostDatabaseItem).filter(*org_filter).all()
 
     best_match = None
     best_score = 0
@@ -84,18 +77,28 @@ def _find_cost_item(material_name: str, unit: str, org_id: int, db: Session) -> 
     for ci in all_items:
         ci_lower = ci.material_name.lower()
         ci_words = set(w.lower() for w in ci.material_name.split() if len(w) > 2)
-
-        # Score: number of matching keywords + bonus for unit match
         score = sum(1 for k in keywords if k in ci_lower or k in ci_words)
-        # Bonus for unit match
         if ci.unit and unit and ci.unit.lower() == unit.lower():
             score += 0.5
-
         if score > best_score and score >= max(1, len(keywords) * 0.4):
             best_score = score
             best_match = ci
 
-    return best_match
+    if best_match:
+        return best_match
+
+    # If nothing in org DB, check global as fallback (covers edge cases)
+    return _find_global_fallback(material_name, unit, db)
+
+
+def _find_global_fallback(material_name: str, unit: str, db: Session):
+    """Last-resort fallback to global items (shouldn't normally be needed)."""
+    item = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_active == True,
+        CostDatabaseItem.is_global == True,
+        func.lower(CostDatabaseItem.material_name) == material_name.lower()
+    ).first()
+    return item
 
 
 # ============================================================================

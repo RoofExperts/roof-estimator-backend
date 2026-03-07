@@ -943,6 +943,32 @@ def delete_cost_item(
 
 
 # ============================================================================
+# COST DATABASE RESYNC (Platform Defaults)
+# ============================================================================
+
+@router.post("/cost-database/resync")
+def resync_cost_database(
+    update_pricing: bool = False,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Re-sync this org's cost database from platform defaults.
+    - Adds any new global items that the org doesn't have yet.
+    - Fills in missing purchase_unit data on existing items.
+    - If update_pricing=True, also resets pricing to platform defaults.
+    """
+    from seed_data import resync_cost_items_for_org
+    org_id = current_user["org_id"]
+    result = resync_cost_items_for_org(org_id, db, update_pricing=update_pricing)
+    db.commit()
+    return {
+        "message": f"Resync complete: {result['added']} added, {result['updated']} updated",
+        **result
+    }
+
+
+# ============================================================================
 # CONDITION PRESET ENDPOINTS (Company Admin Portal)
 # ============================================================================
 
