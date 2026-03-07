@@ -459,6 +459,7 @@ def list_conditions_with_materials(
                 "purchase_unit": cost_item.purchase_unit if cost_item else None,
                 "units_per_purchase": cost_item.units_per_purchase if cost_item else None,
                 "product_name": cost_item.product_name if cost_item else None,
+                "manufacturer": cost_item.manufacturer if cost_item else None,
                 "cost_db_match": cost_item.material_name if cost_item else None,
             })
 
