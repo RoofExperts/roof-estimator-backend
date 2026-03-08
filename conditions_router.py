@@ -1511,15 +1511,18 @@ def zero_labor_costs(
     try:
         org_id = current_user.get("org_id")
         items = db.query(CostDatabaseItem).filter(
+            CostDatabaseItem.is_active == True,
             or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
         ).all()
+        total = len(items)
         count = 0
         for item in items:
-            if item.labor_cost_per_unit is not None and item.labor_cost_per_unit != 0:
-                item.labor_cost_per_unit = 0
+            old_val = item.labor_cost_per_unit
+            item.labor_cost_per_unit = 0
+            if old_val is None or old_val != 0:
                 count += 1
         db.commit()
-        return {"message": f"Zeroed labor costs on {count} items", "count": count}
+        return {"message": f"Zeroed labor costs on {count} of {total} items", "count": count, "total": total}
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
