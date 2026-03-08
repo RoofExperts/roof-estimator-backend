@@ -1716,17 +1716,19 @@ def zero_labor_costs(
     current_user: dict = Depends(get_current_user)
 ):
     """Zero out labor_cost_per_unit for all cost database items."""
-    org_id = current_user.get("org_id")
-    query = db.query(CostDatabaseItem)
-    if org_id:
-        query = query.filter(
-            or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
-        )
-    count = query.filter(CostDatabaseItem.labor_cost_per_unit != None, CostDatabaseItem.labor_cost_per_unit != 0).update(
-        {CostDatabaseItem.labor_cost_per_unit: 0}, synchronize_session="fetch"
-    )
-    db.commit()
-    return {"message": f"Zeroed labor costs on {count} items"}
+    try:
+        org_id = current_user.get("org_id")
+        items = db.query(CostDatabaseItem).all()
+        count = 0
+        for item in items:
+            if item.labor_cost_per_unit and item.labor_cost_per_unit != 0:
+                item.labor_cost_per_unit = 0
+                count += 1
+        db.commit()
+        return {"message": f"Zeroed labor costs on {count} items", "count": count}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
