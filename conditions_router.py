@@ -1502,6 +1502,26 @@ def resync_cost_database(
     }
 
 
+@router.post("/cost-database/zero-labor")
+def zero_labor_costs(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Zero out labor_cost_per_unit for all cost database items."""
+    try:
+        items = db.query(CostDatabaseItem).all()
+        count = 0
+        for item in items:
+            if item.labor_cost_per_unit and item.labor_cost_per_unit != 0:
+                item.labor_cost_per_unit = 0
+                count += 1
+        db.commit()
+        return {"message": f"Zeroed labor costs on {count} items", "count": count}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
 def get_cost_item(
     item_id: int,
@@ -1708,27 +1728,6 @@ def dedup_cost_database(
         "references_updated": total_refs_updated,
         "details": details,
     }
-
-
-@router.post("/cost-database/zero-labor")
-def zero_labor_costs(
-    db: Session = Depends(get_db),
-    current_user: dict = Depends(get_current_user)
-):
-    """Zero out labor_cost_per_unit for all cost database items."""
-    try:
-        org_id = current_user.get("org_id")
-        items = db.query(CostDatabaseItem).all()
-        count = 0
-        for item in items:
-            if item.labor_cost_per_unit and item.labor_cost_per_unit != 0:
-                item.labor_cost_per_unit = 0
-                count += 1
-        db.commit()
-        return {"message": f"Zeroed labor costs on {count} items", "count": count}
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============================================================================
