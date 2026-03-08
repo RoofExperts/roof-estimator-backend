@@ -1710,6 +1710,25 @@ def dedup_cost_database(
     }
 
 
+@router.post("/cost-database/zero-labor")
+def zero_labor_costs(
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Zero out labor_cost_per_unit for all cost database items."""
+    org_id = current_user.get("org_id")
+    query = db.query(CostDatabaseItem)
+    if org_id:
+        query = query.filter(
+            or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
+        )
+    count = query.filter(CostDatabaseItem.labor_cost_per_unit != None, CostDatabaseItem.labor_cost_per_unit != 0).update(
+        {CostDatabaseItem.labor_cost_per_unit: 0}, synchronize_session="fetch"
+    )
+    db.commit()
+    return {"message": f"Zeroed labor costs on {count} items"}
+
+
 # ============================================================================
 # CONDITION PRESET ENDPOINTS (Company Admin Portal)
 # ============================================================================
