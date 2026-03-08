@@ -1171,7 +1171,13 @@ def list_cost_items(
         or_(CostDatabaseItem.org_id == current_user["org_id"], CostDatabaseItem.is_global == True)
     )
     if material_category:
-        query = query.filter(CostDatabaseItem.material_category == material_category)
+        # Support comma-separated multi-category: match if the filter appears
+        # anywhere in the item's material_category field
+        from sqlalchemy import func
+        cat_lower = material_category.strip().lower()
+        query = query.filter(
+            func.lower(CostDatabaseItem.material_category).like(f"%{cat_lower}%")
+        )
     return query.order_by(CostDatabaseItem.material_name).all()
 
 
@@ -1196,11 +1202,21 @@ def search_cost_database(
     )
 
     if category:
-        query = query.filter(CostDatabaseItem.material_category == category)
+        # Support comma-separated multi-category matching
+        cat_lower = category.strip().lower()
+        query = query.filter(
+            func.lower(CostDatabaseItem.material_category).like(f"%{cat_lower}%")
+        )
 
     if q.strip():
         search_term = f"%{q.strip().lower()}%"
-        query = query.filter(func.lower(CostDatabaseItem.material_name).like(search_term))
+        query = query.filter(
+            or_(
+                func.lower(CostDatabaseItem.material_name).like(search_term),
+                func.lower(func.coalesce(CostDatabaseItem.manufacturer, '')).like(search_term),
+                func.lower(func.coalesce(CostDatabaseItem.product_name, '')).like(search_term),
+            )
+        )
 
     results = query.order_by(CostDatabaseItem.material_name).limit(50).all()
 
