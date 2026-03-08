@@ -293,6 +293,13 @@ class CostDatabaseItemUpdate(BaseModel):
     product_name: Optional[str] = None
 
 
+class BulkUpdateRequest(BaseModel):
+    """Schema for bulk updating cost database items."""
+    item_ids: List[int]
+    manufacturer: Optional[str] = None
+    material_category: Optional[str] = None
+
+
 class CostDatabaseItemResponse(BaseModel):
     """Schema for cost database item response."""
     id: int
@@ -1526,6 +1533,41 @@ def zero_labor_costs(
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/cost-database/bulk-update")
+def bulk_update_cost_items(
+    request: BulkUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """Bulk update manufacturer and/or category on multiple cost database items."""
+    if not request.item_ids:
+        raise HTTPException(status_code=400, detail="No item IDs provided")
+    if request.manufacturer is None and request.material_category is None:
+        raise HTTPException(status_code=400, detail="Must provide manufacturer or material_category to update")
+
+    org_id = current_user.get("org_id")
+    items = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.id.in_(request.item_ids),
+        CostDatabaseItem.is_active == True,
+        or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
+    ).all()
+
+    if not items:
+        raise HTTPException(status_code=404, detail="No matching items found")
+
+    count = 0
+    for item in items:
+        if request.manufacturer is not None:
+            item.manufacturer = request.manufacturer
+        if request.material_category is not None:
+            item.material_category = request.material_category
+        item.last_updated = datetime.datetime.utcnow()
+        count += 1
+
+    db.commit()
+    return {"message": f"Updated {count} items", "count": count}
 
 
 @router.get("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
