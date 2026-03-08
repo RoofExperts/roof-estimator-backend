@@ -1570,6 +1570,119 @@ def bulk_update_cost_items(
     return {"message": f"Updated {count} items", "count": count}
 
 
+@router.post("/cost-database/clean-names")
+def clean_manufacturer_from_names(
+    dry_run: bool = Query(True, description="If true, only report changes without applying them"),
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Audit and clean cost database items:
+    1. Strip manufacturer prefixes from material_name (e.g. "GP/GAF DensDeck" -> "DensDeck")
+    2. Split slash-separated manufacturers into comma-separated tags (e.g. "GP/GAF" -> "GP,GAF")
+    3. Also strip manufacturer from product_name if present
+    """
+    import re
+
+    org_id = current_user.get("org_id")
+    items = db.query(CostDatabaseItem).filter(
+        CostDatabaseItem.is_active == True,
+        or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
+    ).all()
+
+    # Known manufacturer names/prefixes to strip (order matters — longer first)
+    KNOWN_MFRS = [
+        "Carlisle/Versico", "Elevate (Firestone/GenFlex)", "Johns Manville",
+        "Owens Corning", "IB Systems", "GP/Carlisle", "GP/GAF", "GP/Firestone",
+        "GP/Versico", "Carlisle", "Firestone", "GenFlex", "Versico",
+        "GAF", "USG", "GP", "Sarnafil", "Fibertite", "DEXcell",
+        "DensDeck", "Metal Era", "OMG", "Elevate",
+    ]
+
+    changes = []
+    name_cleaned = 0
+    mfr_split = 0
+
+    for item in items:
+        old_name = item.material_name or ""
+        old_mfr = item.manufacturer or ""
+        old_product = item.product_name or ""
+        new_name = old_name
+        new_mfr = old_mfr
+        new_product = old_product
+
+        # 1. Split slash-separated manufacturers into comma-separated
+        if "/" in old_mfr:
+            parts = [p.strip() for p in old_mfr.split("/") if p.strip()]
+            new_mfr = ",".join(parts)
+
+        # 2. Strip manufacturer prefix from material_name
+        for mfr in KNOWN_MFRS:
+            # Match "MFR " or "MFR/" at start of name (case-insensitive)
+            pattern = re.compile(r'^' + re.escape(mfr) + r'[\s/]+', re.IGNORECASE)
+            new_name = pattern.sub('', new_name)
+
+        # Also strip from product_name
+        if new_product:
+            for mfr in KNOWN_MFRS:
+                pattern = re.compile(r'^' + re.escape(mfr) + r'[\s/]+', re.IGNORECASE)
+                new_product = pattern.sub('', new_product)
+
+        # Clean up any leading/trailing whitespace
+        new_name = new_name.strip()
+        new_product = new_product.strip()
+
+        changed = False
+        change_detail = {"id": item.id, "changes": []}
+
+        if new_name != old_name:
+            change_detail["changes"].append({
+                "field": "material_name",
+                "from": old_name,
+                "to": new_name
+            })
+            changed = True
+            name_cleaned += 1
+
+        if new_mfr != old_mfr:
+            change_detail["changes"].append({
+                "field": "manufacturer",
+                "from": old_mfr,
+                "to": new_mfr
+            })
+            changed = True
+            mfr_split += 1
+
+        if new_product != old_product:
+            change_detail["changes"].append({
+                "field": "product_name",
+                "from": old_product,
+                "to": new_product
+            })
+            changed = True
+
+        if changed:
+            changes.append(change_detail)
+            if not dry_run:
+                item.material_name = new_name
+                item.manufacturer = new_mfr
+                item.product_name = new_product if new_product else None
+                item.last_updated = datetime.datetime.utcnow()
+
+    if not dry_run:
+        db.commit()
+
+    return {
+        "message": f"{'Would clean' if dry_run else 'Cleaned'} {len(changes)} items ({name_cleaned} names stripped, {mfr_split} manufacturers split)",
+        "dry_run": dry_run,
+        "total_items": len(items),
+        "items_changed": len(changes),
+        "names_cleaned": name_cleaned,
+        "manufacturers_split": mfr_split,
+        "details": changes[:50]  # Limit detail output
+    }
+
+
 @router.get("/cost-database/{item_id}", response_model=CostDatabaseItemResponse)
 def get_cost_item(
     item_id: int,
