@@ -1507,12 +1507,15 @@ def zero_labor_costs(
     db: Session = Depends(get_db),
     current_user: dict = Depends(get_current_user)
 ):
-    """Zero out labor_cost_per_unit for all cost database items."""
+    """Zero out labor_cost_per_unit for all cost database items belonging to user's org."""
     try:
-        items = db.query(CostDatabaseItem).all()
+        org_id = current_user.get("org_id")
+        items = db.query(CostDatabaseItem).filter(
+            or_(CostDatabaseItem.org_id == org_id, CostDatabaseItem.is_global == True)
+        ).all()
         count = 0
         for item in items:
-            if item.labor_cost_per_unit and item.labor_cost_per_unit != 0:
+            if item.labor_cost_per_unit is not None and item.labor_cost_per_unit != 0:
                 item.labor_cost_per_unit = 0
                 count += 1
         db.commit()
