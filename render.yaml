@@ -12,5 +12,13 @@ services:
         generateValue: true
       - key: OPENAI_API_KEY
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: VISION_PROVIDER
+        value: anthropic
+      - key: VISION_MODEL_ANTHROPIC
+        value: claude-opus-4-7
+      - key: VISION_MODEL_OPENAI
+        value: gpt-4o
     runtime:
       pythonVersion: 3.11

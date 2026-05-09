@@ -1,12 +1,15 @@
 """
 Core AI Vision analysis engine for reading architectural roof plans.
-Converts PDF pages to images, sends to GPT-4o vision, extracts measurements,
-and auto-creates RoofCondition records.
+Converts PDF pages to images, sends to a configurable vision provider
+(Anthropic Claude Opus 4.7 by default, OpenAI GPT-4o as fallback),
+extracts measurements, and auto-creates RoofCondition records.
 
 Page-type-aware extraction:
-  - Slab Plan â roof area (LÃW), parapet wall (lnft), coping (lnft)
-  - Roof Plan â roof drains (ea), scuppers (ea), pitch pans (ea), pipes (ea), curbs (lnft)
-  - Elevations â parapet flashing height (in), collector heads (ea), downspouts (lnft)
+  - Slab Plan -> roof area (L x W), parapet wall (lnft), coping (lnft)
+  - Roof Plan -> roof drains (ea), scuppers (ea), pitch pans (ea), pipes (ea), curbs (lnft)
+  - Elevations -> parapet flashing height (in), collector heads (ea), downspouts (lnft)
+
+Provider selection: VISION_PROVIDER env var ("anthropic" default, "openai" fallback).
 """
 
 import os
@@ -16,7 +19,6 @@ import base64
 import asyncio
 import fitz  # PyMuPDF
 from PIL import Image
-from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
@@ -30,20 +32,77 @@ from vision_prompts import (
     validate_extraction,
 )
 
-async_client = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY"),
-    timeout=120.0,
-)
+# ============================================================================
+# PROVIDER CONFIGURATION
+# ============================================================================
+# VISION_PROVIDER controls which vendor handles vision calls.
+#   - "anthropic" -> Claude Opus 4.7 (default; better visual acuity)
+#   - "openai"    -> GPT-4o (legacy / fallback / A-B testing)
+VISION_PROVIDER = os.getenv("VISION_PROVIDER", "anthropic").lower().strip()
 
+# Per-provider model IDs (env-overridable for safe model upgrades)
+ANTHROPIC_MODEL = os.getenv("VISION_MODEL_ANTHROPIC", "claude-opus-4-7")
+OPENAI_MODEL    = os.getenv("VISION_MODEL_OPENAI", "gpt-4o")
+
+# Lazy-init clients so we don't import the wrong SDK when a key is missing
+_anthropic_client = None
+_openai_client    = None
+
+
+def _get_anthropic_client():
+    """Lazy-init the Anthropic async client."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        from anthropic import AsyncAnthropic
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "ANTHROPIC_API_KEY not set. Either set it in the environment "
+                "or set VISION_PROVIDER=openai to use the OpenAI fallback."
+            )
+        _anthropic_client = AsyncAnthropic(api_key=api_key, timeout=120.0)
+    return _anthropic_client
+
+
+def _get_openai_client():
+    """Lazy-init the OpenAI async client (legacy fallback)."""
+    global _openai_client
+    if _openai_client is None:
+        from openai import AsyncOpenAI
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "OPENAI_API_KEY not set. Either set it in the environment "
+                "or set VISION_PROVIDER=anthropic to use Claude Opus 4.7."
+            )
+        _openai_client = AsyncOpenAI(api_key=api_key, timeout=120.0)
+    return _openai_client
+
+
+# ============================================================================
+# PIPELINE CONFIGURATION
+# ============================================================================
+# Resolution: Anthropic Opus 4.7 supports up to 2,576px on the long edge with
+# better fine-detail recovery than GPT-4o, so we raise DPI back up. For the
+# OpenAI fallback we keep the original settings.
 MAX_PAGES = 20
-IMAGE_DPI = 120  # Lowered from 150 to reduce image size and API latency
-MAX_IMAGE_SIZE_MB = 3.0  # Lowered from 4MB to speed up API calls
-VISION_MODEL = "gpt-4o"
 MAX_EXTRACTION_PAGES = 10  # Analyze up to 10 pages for measurements
+
+if VISION_PROVIDER == "anthropic":
+    IMAGE_DPI = 200             # Up from 120; Opus 4.7 handles fine detail
+    MAX_IMAGE_SIZE_MB = 4.5     # Up from 3.0; Anthropic accepts up to 5MB per image
+    MAX_LONG_EDGE_PX = 2400     # Stay under Anthropic's 2,576px ceiling with margin
+else:
+    IMAGE_DPI = 120             # Original GPT-4o-tuned settings
+    MAX_IMAGE_SIZE_MB = 3.0
+    MAX_LONG_EDGE_PX = 2048
+
+# Hard timeout per vision API call (seconds). Both providers respect this.
+CALL_TIMEOUT_SECONDS = 60       # Up from 30; high-detail Opus calls can take longer
 
 
 def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
-    """Convert PDF pages to base64-encoded images for GPT-4o vision."""
+    """Convert PDF pages to base64-encoded images for the configured vision provider."""
     doc = fitz.open(file_path)
     page_count = min(len(doc), max_pages)
     images = []
@@ -66,29 +125,79 @@ def convert_pdf_to_images(file_path: str, max_pages: int = MAX_PAGES) -> list:
 
 
 def compress_image_to_base64(img, max_size_mb: float = MAX_IMAGE_SIZE_MB) -> str:
-    """Compress image to JPEG and return base64 string."""
-    quality = 85
-    while quality >= 20:
-        buffer = io.BytesIO()
-        img.save(buffer, format="JPEG", quality=quality)
-        size_mb = buffer.tell() / (1024 * 1024)
-        if size_mb <= max_size_mb:
-            return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    """Compress a PIL Image to JPEG and base64-encode it.
+
+    Resizes if the long edge exceeds MAX_LONG_EDGE_PX (provider-specific),
+    then progressively reduces JPEG quality until the encoded size fits
+    under max_size_mb.
+    """
+    # Step 1: enforce long-edge limit (preserves aspect ratio)
+    long_edge = max(img.size)
+    if long_edge > MAX_LONG_EDGE_PX:
+        scale = MAX_LONG_EDGE_PX / long_edge
+        new_size = (int(img.size[0] * scale), int(img.size[1] * scale))
+        img = img.resize(new_size, Image.LANCZOS)
+
+    # Step 2: encode and progressively reduce quality if still too large
+    quality = 90
+    while True:
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        size_mb = buf.tell() / (1024 * 1024)
+        if size_mb <= max_size_mb or quality <= 40:
+            break
         quality -= 10
-
-    img = img.resize((img.width // 2, img.height // 2), Image.LANCZOS)
-    buffer = io.BytesIO()
-    img.save(buffer, format="JPEG", quality=60)
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
-CALL_TIMEOUT_SECONDS = 30  # Hard timeout per GPT-4o API call (reduced from 90)
+# ============================================================================
+# PROVIDER-AWARE VISION CALL
+# ============================================================================
+
+async def _async_vision_call_anthropic(image_base64: str, prompt: str, detail: str) -> str:
+    """Anthropic Claude Opus 4.7 vision call.
+
+    Anthropic doesn't have a 'detail' parameter — image quality is governed by
+    what we send. The `detail` arg is kept for API compatibility with the OpenAI
+    path. We map it to max_tokens (low=800 for classification, high=2000 for
+    extraction).
+    """
+    client = _get_anthropic_client()
+    max_tokens = 800 if detail == "low" else 2000
+
+    response = await client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=max_tokens,
+        temperature=0.0,  # Deterministic for measurement extraction
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_base64,
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }],
+    )
+
+    # Anthropic returns content blocks; concatenate any text blocks
+    parts = []
+    for block in response.content:
+        if getattr(block, "type", None) == "text":
+            parts.append(block.text)
+    return "".join(parts)
 
 
-async def _async_vision_call(image_base64: str, prompt: str, detail: str) -> str:
-    """Internal: make the actual OpenAI API call using async client."""
-    response = await async_client.chat.completions.create(
-        model=VISION_MODEL,
+async def _async_vision_call_openai(image_base64: str, prompt: str, detail: str) -> str:
+    """OpenAI GPT-4o vision call (legacy fallback)."""
+    client = _get_openai_client()
+    response = await client.chat.completions.create(
+        model=OPENAI_MODEL,
         messages=[{
             "role": "user",
             "content": [
@@ -106,38 +215,48 @@ async def _async_vision_call(image_base64: str, prompt: str, detail: str) -> str
 
 
 def call_vision_api(image_base64: str, prompt: str, detail: str = "high") -> str:
-    """Send an image to GPT-4o vision and return the response text.
+    """Send an image to the configured vision provider and return text.
 
-    Uses asyncio with wait_for() for a HARD timeout that actually cancels
-    the HTTP request. Previous approaches (threading, concurrent.futures)
-    failed because Python threads cannot be interrupted - they just get
-    abandoned while still holding connections. asyncio.wait_for() cancels
-    the coroutine which closes the underlying HTTP connection.
+    Routes to Anthropic Claude Opus 4.7 (default) or OpenAI GPT-4o based on
+    the VISION_PROVIDER env var. Uses asyncio.wait_for() for a HARD timeout
+    that actually cancels the HTTP request.
 
     Args:
-        detail: "high" for measurement extraction (needs precision),
-                "low" for page classification (just needs to see layout).
+        image_base64: JPEG image as base64 string.
+        prompt:       Vision prompt text.
+        detail:       "high" for measurement extraction, "low" for classification.
+                      Used by OpenAI directly; mapped to max_tokens for Anthropic.
     """
+    if VISION_PROVIDER == "anthropic":
+        coro_fn = _async_vision_call_anthropic
+        provider_label = "Claude Opus 4.7"
+    elif VISION_PROVIDER == "openai":
+        coro_fn = _async_vision_call_openai
+        provider_label = "GPT-4o"
+    else:
+        raise RuntimeError(
+            f"Unknown VISION_PROVIDER='{VISION_PROVIDER}'. "
+            f"Expected 'anthropic' or 'openai'."
+        )
+
     async def _run_with_timeout():
         return await asyncio.wait_for(
-            _async_vision_call(image_base64, prompt, detail),
+            coro_fn(image_base64, prompt, detail),
             timeout=CALL_TIMEOUT_SECONDS,
         )
 
-    # Create a new event loop for each call (we're in a sync context)
     loop = asyncio.new_event_loop()
     try:
-        result = loop.run_until_complete(_run_with_timeout())
-        return result
+        return loop.run_until_complete(_run_with_timeout())
     except asyncio.TimeoutError:
-        print(f"[Vision] HARD TIMEOUT: GPT-4o async call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
-        raise TimeoutError(f"GPT-4o API call timed out after {CALL_TIMEOUT_SECONDS}s")
+        print(f"[Vision] HARD TIMEOUT: {provider_label} async call exceeded {CALL_TIMEOUT_SECONDS}s (detail={detail})")
+        raise TimeoutError(f"{provider_label} API call timed out after {CALL_TIMEOUT_SECONDS}s")
     finally:
         loop.close()
 
 
 def classify_page(image_base64: str) -> dict:
-    """Use GPT-4o to classify what type of architectural page this is.
+    """Use the configured vision provider to classify what type of architectural page this is.
     Uses detail='low' since classification only needs to see the general layout,
     not read fine measurements. This is ~3-5x faster than 'high' detail.
     """
@@ -145,7 +264,7 @@ def classify_page(image_base64: str) -> dict:
 
 
 def detect_scale(image_base64: str) -> dict:
-    """Use GPT-4o to find and parse the drawing scale.
+    """Use the configured vision provider to find and parse the drawing scale.
     Uses detail='high' because scale notation (especially fractions like
     3/16" vs 1/8") requires pixel-level precision to read correctly.
     Misreading the scale cascades into area errors (e.g., 1/8" vs 3/16"
@@ -155,7 +274,7 @@ def detect_scale(image_base64: str) -> dict:
 
 
 def extract_measurements_for_page(image_base64: str, page_type: str, scale_info: dict) -> dict:
-    """Use GPT-4o to extract measurements using the appropriate page-type prompt."""
+    """Use the configured vision provider to extract measurements using the appropriate page-type prompt."""
     prompt = build_prompt_for_page_type(page_type, scale_info)
     return parse_vision_response(call_vision_api(image_base64, prompt))
 
@@ -174,14 +293,12 @@ def pixel_based_area_estimate(image_base64: str, scale_info: dict, image_width: 
     """Estimate building area using image pixel analysis.
 
     Uses the known DPI and scale ratio to calculate a pixels-per-foot ratio,
-    then asks GPT-4o to estimate the building outline as a fraction of the
-    total image. This provides an independent validation of the area measurement.
+    then provides an independent validation of the area measurement.
 
     How it works:
-    - At IMAGE_DPI (120), 1 inch on paper = 120 pixels
-    - If scale is 1/8" = 1'-0" (ratio 96), then 1 real foot = 1/8" on paper = 15 pixels
-    - So pixels_per_foot = IMAGE_DPI / scale_ratio_denominator
-    - If GPT-4o says the building spans ~600 pixels wide, that's 600/15 = 40 feet
+    - At IMAGE_DPI, 1 inch on paper = IMAGE_DPI pixels
+    - If scale is 1/8" = 1'-0" (ratio 96), then 1 real foot = 1/8" on paper = IMAGE_DPI/8 pixels
+    - So pixels_per_foot = IMAGE_DPI * 12 / scale_ratio
 
     Returns dict with estimated area and confidence, or None if can't compute.
     """
@@ -296,7 +413,6 @@ def cross_check_roof_area(measurements: list) -> list:
             # measuring by scale. If there's a significant discrepancy, prefer
             # the floor plan dimensions.
             other_is_dimension_source = other_source_type in ("floor_plan", "slab_plan")
-            primary_is_scale_based = primary.get("measurement_method") == "scale_measurement"
 
             if discrepancy_pct > 20 and other_is_dimension_source:
                 # Floor plan with labeled dimensions vs roof plan scale measurement:
@@ -328,7 +444,7 @@ def cross_check_roof_area(measurements: list) -> list:
 
 
 # ======================================================================
-# Extraction type â RoofCondition mapping
+# Extraction type -> RoofCondition mapping
 # ======================================================================
 
 EXTRACTION_TO_CONDITION = {
@@ -352,7 +468,7 @@ EXTRACTION_TO_CONDITION = {
     "collector_head": {"condition_type": "custom", "unit": "each"},
     "downspout": {"condition_type": "custom", "unit": "lnft"},
 
-    # GPT-4o name variations (aliases)
+    # Name variations (aliases)
     "building_area": {"condition_type": "field", "unit": "sqft"},
     "building_dimensions": {"condition_type": "field", "unit": "sqft"},
     "roof_drains": {"condition_type": "custom", "unit": "each"},
@@ -502,14 +618,24 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         return {"status": "error", "message": "Plan file not found"}
 
     try:
-        # Pre-flight check: verify OpenAI API key is configured
-        api_key = os.getenv("OPENAI_API_KEY")
+        # Pre-flight check: verify the configured provider has an API key
+        if VISION_PROVIDER == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            key_name = "ANTHROPIC_API_KEY"
+            provider_label = "Claude Opus 4.7"
+        else:
+            api_key = os.getenv("OPENAI_API_KEY")
+            key_name = "OPENAI_API_KEY"
+            provider_label = "GPT-4o"
+
         if not api_key:
             plan_file.upload_status = "failed"
-            plan_file.error_message = "OpenAI API key not configured. Set OPENAI_API_KEY environment variable."
+            plan_file.error_message = f"{key_name} not configured. Set {key_name} env var or change VISION_PROVIDER."
             db.commit()
-            print("[Vision] ERROR: OPENAI_API_KEY not set")
-            return {"status": "error", "message": "OpenAI API key not configured"}
+            print(f"[Vision] ERROR: {key_name} not set (VISION_PROVIDER={VISION_PROVIDER})")
+            return {"status": "error", "message": f"{key_name} not configured"}
+
+        print(f"[Vision] Using {provider_label} (model={ANTHROPIC_MODEL if VISION_PROVIDER == 'anthropic' else OPENAI_MODEL})")
 
         plan_file.upload_status = "processing"
         db.commit()
@@ -691,7 +817,7 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
             page_measurements = measurements_result.get("measurements", [])
 
-            # === ROOF PLAN AREA MEASUREMENT (new dual extraction) ===
+            # === ROOF PLAN AREA MEASUREMENT (dual extraction) ===
             # For roof plan pages, ALSO run the dedicated area measurement prompt.
             # This measures the building footprint using the scale — the primary
             # method for getting accurate square footage.
