@@ -49,7 +49,7 @@ class PlanPageAnalysis(Base):
 
 
 class VisionExtraction(Base):
-    """Individual measurement extracted from a roof plan by GPT-4o vision."""
+    """Individual measurement extracted from a roof plan by the configured vision provider."""
     __tablename__ = "vision_extractions"
 
     id = Column(Integer, primary_key=True, index=True)

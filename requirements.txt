@@ -6,6 +6,7 @@ python-dotenv
 python-jose
 bcrypt
 openai
+anthropic>=0.39.0
 pymupdf
 openpyxl
 python-multipart
@@ -17,3 +18,4 @@ pydantic
 Pillow
 reportlab
 opencv-python-headless
+pytest>=7.0.0

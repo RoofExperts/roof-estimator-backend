@@ -1,6 +1,7 @@
 """
-GPT-4o Vision prompt templates for architectural roof plan analysis.
+Vision prompt templates for architectural roof plan analysis.
 Domain-specific extraction logic for commercial roofing estimation.
+Works with both Anthropic Claude and OpenAI GPT-4o providers.
 """
 
 import json
@@ -47,7 +48,8 @@ Respond with ONLY this JSON (no other text):
     "is_roof_relevant": true,
     "has_building_dimensions": true,
     "notes": "Slab plan showing building dimensions of 120' x 85' which gives roof area"
-}"""
+}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 SCALE_DETECTION_PROMPT = """You are analyzing an architectural drawing page.
@@ -85,7 +87,8 @@ Respond with ONLY this JSON (no other text):
     "scale_location": "title block, bottom right",
     "confidence": 0.90,
     "notes": "Scale clearly marked in title block as 3/16\" = 1'-0\""
-}"""
+}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 # ======================================================================
@@ -140,7 +143,8 @@ Otherwise respond with ONLY JSON:
     ],
     "overall_confidence": 0.80,
     "notes": "Slab plan with clear building dimensions"
-}}"""
+}}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 ROOF_PLAN_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing a ROOF PLAN page.
@@ -198,7 +202,8 @@ Otherwise respond with ONLY JSON:
     ],
     "overall_confidence": 0.80,
     "notes": "Roof plan with drains, scuppers, pitch pans, pipes, and curbs. DO NOT include roof_area here."
-}}"""
+}}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 ROOF_PLAN_AREA_MEASUREMENT_PROMPT = """You are a commercial roofing estimator analyzing a ROOF PLAN page.
@@ -308,7 +313,8 @@ If dimensions were NOT labeled and you measured using the scale:
     "scale_used": "3/16 inch = 1 foot (1:64)",
     "scale_text_on_drawing": "3/16\" = 1'-0\"",
     "notes": "No dimensions labeled on plan. Measured building outline against graphical scale bar."
-}}"""
+}}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 ELEVATION_EXTRACTION_PROMPT = """You are a commercial roofing estimator analyzing an ELEVATION VIEW page.
@@ -361,7 +367,8 @@ Otherwise respond with ONLY JSON:
     ],
     "overall_confidence": 0.80,
     "notes": "Elevation showing parapet heights, collector heads, and downspouts"
-}}"""
+}}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 # Generic fallback for other page types
@@ -397,7 +404,8 @@ Otherwise respond with ONLY JSON:
     ],
     "overall_confidence": 0.75,
     "notes": "Description of what was found"
-}}"""
+}}
+Return ONLY the JSON object. No prose, no markdown code fences, no explanation before or after."""
 
 
 # ==========================================================
@@ -405,7 +413,11 @@ Otherwise respond with ONLY JSON:
 # ==========================================================
 
 def parse_vision_response(response_text: str) -> dict:
-    """Parse GPT-4o vision response into structured data."""
+    """Parse vision response into structured data.
+
+    Both Claude (Anthropic) and GPT-4o (OpenAI) return text that may include
+    markdown code fences around JSON. This function strips fences and parses.
+    """
     if not response_text:
         return {"error": "Empty response"}
 
