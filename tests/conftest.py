@@ -1,18 +1,20 @@
 """
 pytest configuration for the test suite.
 
-Installs a pdfplumber stub into sys.modules BEFORE any test file is imported,
-so that tests run in environments where the underlying C/Rust libraries
-(cryptography/cffi) are broken or unavailable (e.g., some CI sandboxes).
+Installs stubs for heavy C/Rust-backed libraries into sys.modules BEFORE any
+test file is imported, so tests run in environments where the underlying system
+libraries (cryptography/cffi/Rust) are broken or unavailable (e.g., some CI
+sandboxes).
 
-In production the real pdfplumber is always installed and used.
+In production the real libraries are always installed and used.
+
+Libraries stubbed here:
+  - pdfplumber  (requires cryptography/cffi — broken in some containers)
+  - fitz        (PyMuPDF — requires libmupdf — may be absent in lean CI images)
 """
 import sys
 import types
 
-# Install the stub unconditionally at collection time if pdfplumber is not
-# already cleanly importable. We do this at module level (not inside a fixture)
-# so spec_ai can be imported during test collection without hitting the Rust panic.
-if "pdfplumber" not in sys.modules:
-    stub = types.ModuleType("pdfplumber")
-    sys.modules["pdfplumber"] = stub
+for _mod_name in ("pdfplumber", "fitz"):
+    if _mod_name not in sys.modules:
+        sys.modules[_mod_name] = types.ModuleType(_mod_name)
