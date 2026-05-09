@@ -20,5 +20,11 @@ services:
         value: claude-opus-4-7
       - key: VISION_MODEL_OPENAI
         value: gpt-4o
+      - key: SPEC_PROVIDER
+        value: anthropic
+      - key: SPEC_MODEL_ANTHROPIC
+        value: claude-sonnet-4-6
+      - key: SPEC_MODEL_OPENAI
+        value: gpt-4o-mini
     runtime:
       pythonVersion: 3.11
