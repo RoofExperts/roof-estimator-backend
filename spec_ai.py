@@ -183,7 +183,6 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
       - page.extract_tables() pulls structured rows we used to throw away
     """
     collected_pages = []  # list of (score, page_num, layout_text, tables) tuples
-    collected_chars = 0
     total_pages = 0
 
     with pdfplumber.open(file_path) as pdf:
@@ -276,11 +275,13 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 elif len(specific_hits) >= 1 and len(support_hits) >= 2:
                     is_spec_page = True
 
-            # Also collect continuation pages: no specific keywords but lots of
-            # support keywords (these have details like thickness, warranty, etc.)
-            if not is_spec_page and len(support_hits) >= 3:
-                is_spec_page = True
-                print(f"[spec_ai] Page {i+1} collected as continuation (support={support_hits})")
+            # NOTE: We previously had a support-only fallback
+            # (`len(support_hits) >= 3 -> collect`), but it pulled in pages
+            # from non-roofing divisions that mention generic words like
+            # INSULATION/SEALANT/FASTENER/MEMBRANE. The TOC + section-number
+            # filter and div07 header check above already protect against
+            # missing real Division 07 pages, so we now require at least one
+            # roofing-SPECIFIC keyword.
 
             if is_spec_page:
                 # === NEW: extract layout-preserved text + tables ===
@@ -315,7 +316,6 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 page_score = len(specific_hits) + membrane_hits * 2 + (5 if has_div07_header else 0)
 
                 collected_pages.append((page_score, i+1, layout_text, page_tables))
-                collected_chars += len(layout_text)
                 print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, "
                       f"support_count={len(support_hits)}, div07_header={has_div07_header}, "
                       f"score={page_score}, tables={len(page_tables)}")
@@ -325,9 +325,12 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                           f"specific={specific_hits}, support_count={len(support_hits)}, "
                           f"div07={has_div07_header}")
 
-            if collected_chars > MAX_DIVISION_CHARS:
-                print(f"[spec_ai] Hit MAX_DIVISION_CHARS limit ({collected_chars} chars)")
-                break
+            # We deliberately do NOT early-break on collected_chars here.
+            # Long spec books often place real Division 07 deep in the
+            # document; breaking early let false-positive pages from earlier
+            # divisions starve the real ones. The MAX_PROMPT_CHARS truncation
+            # in analyze_spec_text_from_pdf still caps the payload sent to
+            # the model.
 
             del text, text_upper
             gc.collect()
@@ -351,6 +354,15 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
             all_tables.append({"page": page_num, "rows": tbl})
 
     result_text = "\n\n".join(text_parts)
+
+    # Diagnostics — these land in Render's log stream so we can debug
+    # collection issues without re-running the pipeline.
+    top10 = [pg for _score, pg, _txt, _tbls in collected_pages[:10]]
+    print(f"[spec_ai] DIAG: total_pages_in_pdf={total_pages}")
+    print(f"[spec_ai] DIAG: pages_collected={len(collected_pages)}")
+    print(f"[spec_ai] DIAG: top10_pages_by_score={top10}")
+    print(f"[spec_ai] DIAG: assembled_text_first_200={result_text[:200]!r}")
+
     print(f"[spec_ai] Extracted {len(result_text)} chars from {len(collected_pages)} pages "
           f"({len(all_tables)} tables)")
     print(f"[spec_ai] First 300 chars: {result_text[:300]}")
@@ -376,7 +388,6 @@ def _fallback_roofing_extract(file_path: str) -> Optional[dict]:
     ]
     collected = []
     all_tables = []
-    collected_chars = 0
     total_pages = 0
 
     with pdfplumber.open(file_path) as pdf:
@@ -403,10 +414,9 @@ def _fallback_roofing_extract(file_path: str) -> Optional[dict]:
                 collected.append((i+1, layout_text))
                 for t in page_tables:
                     all_tables.append({"page": i+1, "rows": t})
-                collected_chars += len(layout_text)
 
-            if collected_chars > MAX_DIVISION_CHARS:
-                break
+            # No early-break: process the full PDF; analyze_spec_text_from_pdf
+            # truncates the final payload via MAX_PROMPT_CHARS.
 
             del text, text_upper
             gc.collect()

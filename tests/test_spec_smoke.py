@@ -99,3 +99,109 @@ def test_pydantic_schema_all_fields_optional():
     # Should not raise; all fields default to None
     assert obj.membrane_type is None
     assert obj.warranty_years is None
+
+
+# --------------------------------------------------------------------------
+# Page-collector regression tests (fix-spec-page-collection)
+# --------------------------------------------------------------------------
+class _FakePage:
+    """Minimal stand-in for a pdfplumber Page used by spec_ai's collector."""
+    def __init__(self, text):
+        self._text = text
+
+    def extract_text(self, layout=False):
+        return self._text
+
+    def extract_tables(self):
+        return []
+
+
+class _FakePDF:
+    def __init__(self, pages):
+        self.pages = pages
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _patch_pdfplumber(monkeypatch, pages):
+    """Make pdfplumber.open() return a fake PDF wrapping the given pages."""
+    import pdfplumber
+
+    def _fake_open(_path):
+        return _FakePDF(pages)
+
+    monkeypatch.setattr(pdfplumber, "open", _fake_open, raising=False)
+
+
+def test_non_roofing_division_page_is_not_collected(monkeypatch):
+    """A page from Division 09 (Painting) packed with generic support
+    keywords (INSULATION, SEALANT, FASTENER, MEMBRANE, ADHESIVE,
+    MANUFACTURER) but ZERO roofing-specific keywords must NOT be
+    collected as Division 07 content.
+
+    Regression for the bug where the support-only fallback let
+    non-roofing pages slip through when other trades happened to
+    mention the same generic words.
+    """
+    div09_text = (
+        "SECTION 099113 - INTERIOR PAINTING\n"
+        "PART 1 - GENERAL\n"
+        "1.1 SUMMARY\n"
+        "A. Section includes painting of interior gypsum board surfaces\n"
+        "   throughout the project. Coordinate with adjacent trades.\n"
+        "1.2 SUBMITTALS\n"
+        "A. Provide product data for paint, primer, and FASTENER schedule.\n"
+        "B. Submit ADHESIVE compatibility report from the MANUFACTURER.\n"
+        "C. Identify INSULATION clearances where painting overlaps\n"
+        "   mechanical penetrations.\n"
+        "1.3 QUALITY ASSURANCE\n"
+        "A. Apply primer per the MANUFACTURER's printed instructions.\n"
+        "PART 2 - PRODUCTS\n"
+        "2.1 MATERIALS\n"
+        "A. Paint base shall be compatible with existing SEALANT joints.\n"
+        "B. MEMBRANE-faced gypsum board shall remain intact during prep.\n"
+        "PART 3 - EXECUTION\n"
+        "3.1 INSTALLATION\n"
+        "A. Coordinate with adjacent trades for FASTENER spacing and\n"
+        "   ADHESIVE cure times. Field-verify substrate moisture.\n"
+    )
+    sa = _reload_spec_ai()
+    _patch_pdfplumber(monkeypatch, [_FakePage(div09_text)])
+
+    # No roofing pages and no fallback hits -> None.
+    result = sa.extract_division_7_from_pdf("/fake/path.pdf")
+    assert result is None, (
+        "Non-roofing Division 09 page was collected as Division 07 content. "
+        "The support-only fallback should be gone."
+    )
+
+
+def test_roofing_page_with_specific_keyword_is_still_collected(monkeypatch):
+    """Sanity: a real Division 07 membrane page with TPO, ROOF SYSTEM,
+    and a 07 52 section header must still be collected. Guards against
+    the tightening accidentally rejecting valid pages.
+    """
+    div07_text = (
+        "SECTION 075423 - THERMOPLASTIC POLYOLEFIN ROOFING\n"
+        "PART 1 - GENERAL\n"
+        "1.1 SUMMARY\n"
+        "A. Section includes a fully adhered TPO ROOF SYSTEM with\n"
+        "   60-mil ROOFING MEMBRANE over POLYISO insulation.\n"
+        "1.2 SUBMITTALS\n"
+        "A. Provide product data including MIL thickness and WARRANTY terms.\n"
+        "PART 2 - PRODUCTS\n"
+        "2.1 MEMBRANE\n"
+        "A. Approved MANUFACTURER: CARLISLE, FIRESTONE, GAF, JOHNS MANVILLE.\n"
+        "B. THICKNESS: 60 mil minimum, FULLY ADHERED.\n"
+    )
+    sa = _reload_spec_ai()
+    _patch_pdfplumber(monkeypatch, [_FakePage(div07_text)])
+
+    result = sa.extract_division_7_from_pdf("/fake/path.pdf")
+    assert result is not None
+    assert result["page_count_collected"] == 1
+    assert "TPO" in result["text"].upper()
