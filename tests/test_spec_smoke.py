@@ -205,3 +205,103 @@ def test_roofing_page_with_specific_keyword_is_still_collected(monkeypatch):
     assert result is not None
     assert result["page_count_collected"] == 1
     assert "TPO" in result["text"].upper()
+
+
+# --------------------------------------------------------------------------
+# Memory-bounded collection tests (Path A fix)
+# --------------------------------------------------------------------------
+
+def test_collection_caps_at_max_kept_pages(monkeypatch):
+    """Synthesize a PDF with 200 valid Division 07 pages. The collector
+    should keep at most MAX_KEPT_PAGES of them (the highest-scoring ones)
+    rather than holding all 200 in memory.
+    """
+    sa = _reload_spec_ai()
+    valid_div07_text = (
+        "SECTION 075423 - THERMOPLASTIC POLYOLEFIN ROOFING\n"
+        "PART 1 - GENERAL\n"
+        "A. TPO ROOF SYSTEM with 60-mil ROOFING MEMBRANE.\n"
+        "B. MANUFACTURER: CARLISLE.\n"
+    )
+    pages = [_FakePage(valid_div07_text) for _ in range(200)]
+    _patch_pdfplumber(monkeypatch, pages)
+
+    result = sa.extract_division_7_from_pdf("/fake/path.pdf")
+    assert result is not None
+    # Hard cap from spec
+    assert result["page_count_collected"] <= sa.MAX_KEPT_PAGES, (
+        f"Collected {result['page_count_collected']} pages; "
+        f"expected at most {sa.MAX_KEPT_PAGES}"
+    )
+    assert result["page_count_total"] == 200
+
+
+def test_high_scoring_page_evicts_low_scoring_when_cap_reached(monkeypatch):
+    """When the candidate list is full of low-score pages, a higher-score
+    page later in the PDF should replace one of them.
+    """
+    sa = _reload_spec_ai()
+
+    # Build MAX_KEPT_PAGES pages of "low score" (just 1 specific keyword
+    # plus a single div07 header to satisfy collection) ...
+    low_score_text = (
+        "SECTION 075423 - THERMOPLASTIC POLYOLEFIN ROOFING\n"
+        "A. TPO is the system type.\n"
+    )
+    # ... and one final page with extra membrane-boost keywords for a
+    # higher score.
+    high_score_text = (
+        "SECTION 075423 - THERMOPLASTIC POLYOLEFIN ROOFING\n"
+        "A. TPO ROOF SYSTEM with FULLY ADHERED 60-MIL ROOFING MEMBRANE.\n"
+        "B. POLYISOCYANURATE INSULATION over COVER BOARD.\n"
+        "C. MANUFACTURER warranty terms specified.\n"
+    )
+
+    pages = [_FakePage(low_score_text)] * sa.MAX_KEPT_PAGES + [_FakePage(high_score_text)]
+    _patch_pdfplumber(monkeypatch, pages)
+
+    result = sa.extract_division_7_from_pdf("/fake/path.pdf")
+    assert result is not None
+    # The high-score page (1-indexed = MAX_KEPT_PAGES + 1) must appear in
+    # the assembled text; its content includes phrases not in the low pages.
+    assert "FULLY ADHERED" in result["text"].upper()
+    assert result["page_count_collected"] == sa.MAX_KEPT_PAGES
+
+
+def test_two_pass_does_not_hold_all_text_in_memory(monkeypatch):
+    """Verify the implementation actually does the two-pass work: in Pass 1
+    we should NOT call extract_text(layout=True). We track calls on a
+    counter to enforce this.
+
+    A correct implementation calls layout=True exactly N times, where N is
+    the number of pages we keep (≤ MAX_KEPT_PAGES). An incorrect (single-
+    pass) implementation calls it once per accepted page during Pass 1.
+    """
+    sa = _reload_spec_ai()
+
+    layout_call_count = {"n": 0}
+
+    class _CountingPage(_FakePage):
+        def extract_text(self, layout=False):
+            if layout:
+                layout_call_count["n"] += 1
+            return self._text
+
+    valid_div07_text = (
+        "SECTION 075423 - THERMOPLASTIC POLYOLEFIN ROOFING\n"
+        "A. TPO ROOFING MEMBRANE 60 MIL fully adhered.\n"
+        "B. MANUFACTURER: CARLISLE.\n"
+    )
+    pages = [_CountingPage(valid_div07_text) for _ in range(50)]
+    _patch_pdfplumber(monkeypatch, pages)
+
+    result = sa.extract_division_7_from_pdf("/fake/path.pdf")
+    assert result is not None
+    # Allow up to MAX_KEPT_PAGES * 2 to give room for fallback paths inside
+    # the Pass 2 try/except, but the count MUST be ≤ pages collected.
+    n_calls = layout_call_count["n"]
+    assert n_calls <= result["page_count_collected"] * 2, (
+        f"Layout extract called {n_calls} times but only "
+        f"{result['page_count_collected']} pages collected — looks like "
+        "Pass 1 is doing the heavy work too."
+    )

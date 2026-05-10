@@ -81,6 +81,14 @@ def _get_openai_client():
 MAX_DIVISION_CHARS = 50000   # Page-collection cap (collect generously)
 MAX_PROMPT_CHARS   = 120000  # Hard cap on what we send to the model
 
+# Memory-bounded page collection (Path A fix following the OOM in PR #5).
+# We hold up to this many (score, page_num) tuples during the page-scoring
+# pass, then run heavy text/table extraction only on the top-N. This bounds
+# memory regardless of how long the input PDF is. Real Division 07 in any
+# spec book we've ever seen fits well inside this limit; the cap exists to
+# stop pathological PDFs from OOMing the service.
+MAX_KEPT_PAGES = 80
+
 
 # ==========================================================
 # MEMORY-EFFICIENT: EXTRACT ONLY DIVISION 07 FROM PDF
@@ -177,12 +185,18 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
       }
     or None if no Division 07 pages were found (caller handles fallback).
 
-    Pages are kept based on keyword density + Division 07 section headers,
-    same logic as before. The change vs. the old version is:
-      - extract_text(layout=True) preserves columns / indentation
-      - page.extract_tables() pulls structured rows we used to throw away
+    Implementation note (memory-bounded design):
+      Pass 1 scans every page using cheap extract_text() only, scores
+      candidates, and keeps at most MAX_KEPT_PAGES (score, page_idx) tuples.
+
+      Pass 2 re-opens the PDF and calls expensive extract_text(layout=True)
+      and extract_tables() ONLY on the kept pages. This bounds peak memory
+      regardless of input PDF length.
     """
-    collected_pages = []  # list of (score, page_num, layout_text, tables) tuples
+    # ------------------------------------------------------------------
+    # PASS 1: cheap scan — score every page, track top MAX_KEPT_PAGES
+    # ------------------------------------------------------------------
+    candidates = []  # list of (score, page_index_0based) — bounded
     total_pages = 0
 
     with pdfplumber.open(file_path) as pdf:
@@ -190,16 +204,16 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
         print(f"[spec_ai] PDF has {total_pages} pages")
 
         for i, page in enumerate(pdf.pages):
-            # Use plain text for keyword matching (faster, simpler)
             text = page.extract_text()
             if not text:
                 continue
 
             text_upper = text.upper()
 
-            # Skip table-of-contents pages
+            # ===== identical gating logic to PR #5 (do not change rules) =====
+
+            # Skip TOC pages
             is_toc_page = "TABLE OF CONTENTS" in text_upper
-            # Also detect TOC by counting 6-digit section numbers (042000, 072113, etc.)
             section_number_count = len(re.findall(r"\b\d{6}\b", text))
             if not is_toc_page and section_number_count >= 8:
                 is_toc_page = True
@@ -209,18 +223,12 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 gc.collect()
                 continue
 
-            # Skip pages whose PRIMARY section is NOT Division 07
-            # Full section headers have a dash/en-dash: "SECTION 061000 - ROUGH CARPENTRY"
-            # or "SECTION 061000 â ROUGH CARPENTRY" (en-dash from PDF)
-            # Cross-references are just: "Section 07 52 00" (no dash)
-            # Match divisions 01-06, 08-49 (i.e., NOT 07)
+            # Non-roofing primary section header — skip unless 3+ roofing keywords
             non_roofing_header = re.search(
                 r"SECTION\s+(0[0-689]|[1-9]\d)\s*\d{4}\s*[\-–—]",
                 text_upper
             )
             if non_roofing_header:
-                # Before skipping, check if this page ALSO has roofing content
-                # (common in PDFs where header/footer shows a different section)
                 roofing_signal = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
                 if len(roofing_signal) < 3:
                     print(f"[spec_ai] Skipping page {i+1}: primary section is non-roofing ({non_roofing_header.group().strip()})")
@@ -230,8 +238,7 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 else:
                     print(f"[spec_ai] Page {i+1} has non-roofing header but {len(roofing_signal)} roofing keywords - keeping")
 
-            # Skip non-roofing DIVISION 07 subsections (EIFS, waterproofing, fireproofing, sealants)
-            # These are 07 1X, 07 2X, 07 8X, 07 9X - NOT roofing
+            # Non-roofing Division 07 subsection (EIFS, waterproofing, sealants)
             non_roofing_div07 = re.search(NON_ROOFING_DIV07_PATTERN, text_upper)
             if non_roofing_div07:
                 print(f"[spec_ai] Skipping page {i+1}: non-roofing Div07 subsection ({non_roofing_div07.group().strip()})")
@@ -239,7 +246,7 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 gc.collect()
                 continue
 
-            # Skip pages with EIFS / wall system negative keywords
+            # EIFS / wall system negative keywords
             eifs_hits = [kw for kw in EIFS_NEGATIVE_KEYWORDS if kw in text_upper]
             if len(eifs_hits) >= 2:
                 print(f"[spec_ai] Skipping page {i+1}: EIFS/wall system content ({eifs_hits})")
@@ -247,26 +254,15 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 gc.collect()
                 continue
 
-            # Check if page has an actual ROOFING Division 07 section header (with dash/en-dash)
-            # Only 07 3X-7X are roofing sections
             has_div07_header = bool(re.search(
                 r"SECTION\s+0?7\s*[3-7]\d\s*\d{2}\s*[\-–—]",
                 text_upper
             ))
-
-            # Count TIER 1 (roofing-specific) keyword hits
             specific_hits = [kw for kw in ROOFING_SPECIFIC_KEYWORDS if kw in text_upper]
-            # Count TIER 2 (support) keyword hits
             support_hits = [kw for kw in ROOFING_SUPPORT_KEYWORDS if kw in text_upper]
 
-            # Collection rules (from strongest to weakest signal):
-            #   - Div 07 section header + 1 specific = collect
-            #   - 2+ specific keywords = collect
-            #   - 1 specific + 2 support = collect
-            #   - 3+ support keywords (continuation pages with details like MIL, WARRANTY, etc.)
             has_specific = len(specific_hits) >= 1
             is_spec_page = False
-
             if has_specific:
                 if has_div07_header:
                     is_spec_page = True
@@ -275,39 +271,8 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 elif len(specific_hits) >= 1 and len(support_hits) >= 2:
                     is_spec_page = True
 
-            # NOTE: We previously had a support-only fallback
-            # (`len(support_hits) >= 3 -> collect`), but it pulled in pages
-            # from non-roofing divisions that mention generic words like
-            # INSULATION/SEALANT/FASTENER/MEMBRANE. The TOC + section-number
-            # filter and div07 header check above already protect against
-            # missing real Division 07 pages, so we now require at least one
-            # roofing-SPECIFIC keyword.
-
             if is_spec_page:
-                # === NEW: extract layout-preserved text + tables ===
-                try:
-                    layout_text = page.extract_text(layout=True) or text
-                except Exception as e:
-                    print(f"[spec_ai] Layout extraction failed page {i+1}, falling back to flat text: {e}")
-                    layout_text = text
-
-                try:
-                    raw_tables = page.extract_tables() or []
-                except Exception as e:
-                    print(f"[spec_ai] Table extraction failed page {i+1}: {e}")
-                    raw_tables = []
-
-                # Filter out tiny / empty tables
-                page_tables = []
-                for tbl in raw_tables:
-                    if not tbl or len(tbl) < 2:
-                        continue
-                    # Skip tables where every cell is empty/whitespace
-                    if not any(any((cell or "").strip() for cell in row) for row in tbl):
-                        continue
-                    page_tables.append(tbl)
-
-                # Score pages so membrane-heavy pages get priority over flashing/coping
+                # Score (same formula as PR #5)
                 MEMBRANE_BOOST = ["TPO", "EPDM", "PVC", "SINGLE-PLY", "ROOFING MEMBRANE",
                                   "FULLY ADHERED", "MECHANICALLY ATTACHED", "COVER BOARD",
                                   "POLYISOCYANURATE", "POLYISO", "ROOF SYSTEM", "MIL",
@@ -315,55 +280,102 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
                 membrane_hits = sum(1 for kw in MEMBRANE_BOOST if kw in text_upper)
                 page_score = len(specific_hits) + membrane_hits * 2 + (5 if has_div07_header else 0)
 
-                collected_pages.append((page_score, i+1, layout_text, page_tables))
-                print(f"[spec_ai] Collecting page {i+1}: specific={specific_hits}, "
+                # Keep at most MAX_KEPT_PAGES candidates, evicting the
+                # lowest-scoring one when full.
+                if len(candidates) < MAX_KEPT_PAGES:
+                    candidates.append((page_score, i))
+                else:
+                    # Find the lowest-scoring candidate and replace it if our
+                    # new page scores higher
+                    min_idx = 0
+                    for idx, (s, _) in enumerate(candidates):
+                        if s < candidates[min_idx][0]:
+                            min_idx = idx
+                    if page_score > candidates[min_idx][0]:
+                        evicted_score, evicted_page = candidates[min_idx]
+                        candidates[min_idx] = (page_score, i)
+                        print(f"[spec_ai] Page {i+1} score={page_score} evicted page {evicted_page+1} score={evicted_score}")
+
+                print(f"[spec_ai] Candidate page {i+1}: specific={specific_hits}, "
                       f"support_count={len(support_hits)}, div07_header={has_div07_header}, "
-                      f"score={page_score}, tables={len(page_tables)}")
+                      f"score={page_score}")
             else:
                 if len(specific_hits) > 0 or len(support_hits) >= 3:
                     print(f"[spec_ai] Skipping page {i+1}: "
                           f"specific={specific_hits}, support_count={len(support_hits)}, "
                           f"div07={has_div07_header}")
 
-            # We deliberately do NOT early-break on collected_chars here.
-            # Long spec books often place real Division 07 deep in the
-            # document; breaking early let false-positive pages from earlier
-            # divisions starve the real ones. The MAX_PROMPT_CHARS truncation
-            # in analyze_spec_text_from_pdf still caps the payload sent to
-            # the model.
-
             del text, text_upper
             gc.collect()
 
-    if not collected_pages:
+    if not candidates:
         print(f"[spec_ai] No roofing spec pages found in {total_pages} pages")
         print(f"[spec_ai] Trying fallback with relaxed criteria...")
         return _fallback_roofing_extract(file_path)
 
-    # Sort by score (highest first)
-    collected_pages.sort(key=lambda x: x[0], reverse=True)
-    for score, pg, _, tables in collected_pages:
-        print(f"[spec_ai]   Ranked: page {pg} score={score} tables={len(tables)}")
+    # Sort highest score first
+    candidates.sort(key=lambda x: x[0], reverse=True)
 
-    # Build the structured result
+    # ------------------------------------------------------------------
+    # PASS 2: heavy extraction — only on the kept pages
+    # ------------------------------------------------------------------
+    print(f"[spec_ai] Pass 2: extracting layout text + tables from {len(candidates)} pages")
+
     text_parts = []
     all_tables = []
-    for score, page_num, layout_text, page_tables in collected_pages:
-        text_parts.append(f"--- PAGE {page_num} ---\n{layout_text}")
-        for tbl in page_tables:
-            all_tables.append({"page": page_num, "rows": tbl})
+    page_numbers_collected = []
+
+    with pdfplumber.open(file_path) as pdf:
+        for score, page_idx in candidates:
+            page = pdf.pages[page_idx]
+            page_num = page_idx + 1
+
+            try:
+                layout_text = page.extract_text(layout=True) or page.extract_text() or ""
+            except Exception as e:
+                print(f"[spec_ai] Layout extraction failed page {page_num}, falling back: {e}")
+                try:
+                    layout_text = page.extract_text() or ""
+                except Exception:
+                    layout_text = ""
+
+            try:
+                raw_tables = page.extract_tables() or []
+            except Exception as e:
+                print(f"[spec_ai] Table extraction failed page {page_num}: {e}")
+                raw_tables = []
+
+            page_tables = []
+            for tbl in raw_tables:
+                if not tbl or len(tbl) < 2:
+                    continue
+                if not any(any((cell or "").strip() for cell in row) for row in tbl):
+                    continue
+                page_tables.append(tbl)
+
+            if layout_text:
+                text_parts.append(f"--- PAGE {page_num} ---\n{layout_text}")
+            for tbl in page_tables:
+                all_tables.append({"page": page_num, "rows": tbl})
+            page_numbers_collected.append(page_num)
+
+            print(f"[spec_ai]   Pass2 page {page_num} score={score} "
+                  f"text={len(layout_text)} tables={len(page_tables)}")
+
+            # Free per-page memory aggressively
+            del layout_text, raw_tables, page_tables
+            gc.collect()
 
     result_text = "\n\n".join(text_parts)
 
-    # Diagnostics — these land in Render's log stream so we can debug
-    # collection issues without re-running the pipeline.
-    top10 = [pg for _score, pg, _txt, _tbls in collected_pages[:10]]
+    # Diagnostics (kept from PR #5)
+    top10 = page_numbers_collected[:10]
     print(f"[spec_ai] DIAG: total_pages_in_pdf={total_pages}")
-    print(f"[spec_ai] DIAG: pages_collected={len(collected_pages)}")
+    print(f"[spec_ai] DIAG: pages_collected={len(page_numbers_collected)}")
     print(f"[spec_ai] DIAG: top10_pages_by_score={top10}")
     print(f"[spec_ai] DIAG: assembled_text_first_200={result_text[:200]!r}")
 
-    print(f"[spec_ai] Extracted {len(result_text)} chars from {len(collected_pages)} pages "
+    print(f"[spec_ai] Extracted {len(result_text)} chars from {len(page_numbers_collected)} pages "
           f"({len(all_tables)} tables)")
     print(f"[spec_ai] First 300 chars: {result_text[:300]}")
 
@@ -371,27 +383,31 @@ def extract_division_7_from_pdf(file_path: str) -> Optional[dict]:
         "text": result_text,
         "tables": all_tables,
         "page_count_total": total_pages,
-        "page_count_collected": len(collected_pages),
+        "page_count_collected": len(page_numbers_collected),
     }
 
 
 def _fallback_roofing_extract(file_path: str) -> Optional[dict]:
-    """
-    Fallback: scan every page for roofing-specific keywords with relaxed criteria.
+    """Fallback when no Division 07 sections were found.
+
+    Last-resort: collect any page that mentions roofing-specific keywords,
+    even without a section header. Same memory-bounded design as the main
+    extractor.
+
     Returns the same dict shape as extract_division_7_from_pdf.
     """
     fallback_keywords = [
-        "ROOFING", "MEMBRANE", "TPO", "EPDM", "PVC",
-        "SINGLE-PLY", "ROOF SYSTEM", "FLASHING",
-        "COVER BOARD", "ROOF DECK", "COPING",
-        "07 52", "07 54", "07 55", "07 61", "07 62",
+        "ROOF MEMBRANE", "ROOFING MEMBRANE", "TPO ROOFING", "EPDM ROOFING",
+        "PVC ROOFING", "SINGLE-PLY ROOFING", "ROOF SYSTEM",
+        "ROOF INSULATION", "TAPERED INSULATION",
     ]
-    collected = []
-    all_tables = []
+    candidates = []  # list of (score, page_idx)
     total_pages = 0
 
     with pdfplumber.open(file_path) as pdf:
         total_pages = len(pdf.pages)
+        print(f"[spec_ai] (fallback) PDF has {total_pages} pages")
+
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if not text:
@@ -399,40 +415,74 @@ def _fallback_roofing_extract(file_path: str) -> Optional[dict]:
             text_upper = text.upper()
 
             hits = [kw for kw in fallback_keywords if kw in text_upper]
-            if len(hits) >= 2:
-                print(f"[spec_ai] Fallback: page {i+1} matched {hits}")
-                try:
-                    layout_text = page.extract_text(layout=True) or text
-                except Exception:
-                    layout_text = text
-                try:
-                    raw_tables = page.extract_tables() or []
-                except Exception:
-                    raw_tables = []
-                page_tables = [t for t in raw_tables if t and len(t) >= 2]
-
-                collected.append((i+1, layout_text))
-                for t in page_tables:
-                    all_tables.append({"page": i+1, "rows": t})
-
-            # No early-break: process the full PDF; analyze_spec_text_from_pdf
-            # truncates the final payload via MAX_PROMPT_CHARS.
+            if len(hits) >= 1:
+                page_score = len(hits)
+                if len(candidates) < MAX_KEPT_PAGES:
+                    candidates.append((page_score, i))
+                else:
+                    min_idx = 0
+                    for idx, (s, _) in enumerate(candidates):
+                        if s < candidates[min_idx][0]:
+                            min_idx = idx
+                    if page_score > candidates[min_idx][0]:
+                        candidates[min_idx] = (page_score, i)
+                print(f"[spec_ai] (fallback) Candidate page {i+1}: hits={hits}, score={page_score}")
 
             del text, text_upper
             gc.collect()
 
-    if not collected:
-        print("[spec_ai] Fallback: NO roofing content found anywhere in PDF")
+    if not candidates:
+        print("[spec_ai] (fallback) No pages with roofing keywords found")
         return None
 
-    text_parts = [f"--- PAGE {pg} ---\n{txt}" for pg, txt in collected]
+    candidates.sort(key=lambda x: x[0], reverse=True)
+    print(f"[spec_ai] (fallback) Pass 2: extracting from {len(candidates)} pages")
+
+    text_parts = []
+    all_tables = []
+    pages_done = 0
+
+    with pdfplumber.open(file_path) as pdf:
+        for score, page_idx in candidates:
+            page = pdf.pages[page_idx]
+            page_num = page_idx + 1
+            try:
+                layout_text = page.extract_text(layout=True) or page.extract_text() or ""
+            except Exception as e:
+                print(f"[spec_ai] (fallback) layout extract failed page {page_num}: {e}")
+                layout_text = page.extract_text() or ""
+
+            try:
+                raw_tables = page.extract_tables() or []
+            except Exception:
+                raw_tables = []
+
+            page_tables = []
+            for tbl in raw_tables:
+                if not tbl or len(tbl) < 2:
+                    continue
+                if not any(any((cell or "").strip() for cell in row) for row in tbl):
+                    continue
+                page_tables.append(tbl)
+
+            if layout_text:
+                text_parts.append(f"--- PAGE {page_num} ---\n{layout_text}")
+            for tbl in page_tables:
+                all_tables.append({"page": page_num, "rows": tbl})
+            pages_done += 1
+
+            del layout_text, raw_tables, page_tables
+            gc.collect()
+
     result_text = "\n\n".join(text_parts)
-    print(f"[spec_ai] Fallback collected {len(result_text)} chars from {len(collected)} pages")
+    print(f"[spec_ai] (fallback) DIAG: total_pages_in_pdf={total_pages} pages_collected={pages_done}")
+    print(f"[spec_ai] (fallback) Extracted {len(result_text)} chars from {pages_done} pages")
+
     return {
         "text": result_text,
         "tables": all_tables,
         "page_count_total": total_pages,
-        "page_count_collected": len(collected),
+        "page_count_collected": pages_done,
     }
 
 
