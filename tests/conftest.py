@@ -18,3 +18,10 @@ import types
 for _mod_name in ("pdfplumber", "fitz"):
     if _mod_name not in sys.modules:
         sys.modules[_mod_name] = types.ModuleType(_mod_name)
+
+# shapely is a Track C dependency. vector_extraction.py guards its import,
+# but stubbing here keeps the module importable in CI environments without
+# a working shapely install.
+for _mod_name in ("shapely", "shapely.geometry", "shapely.ops"):
+    if _mod_name not in sys.modules:
+        sys.modules[_mod_name] = types.ModuleType(_mod_name)

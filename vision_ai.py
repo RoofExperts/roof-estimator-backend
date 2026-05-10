@@ -22,7 +22,7 @@ from PIL import Image
 from sqlalchemy.orm import Session
 
 from database import SessionLocal
-from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction
+from vision_models import RoofPlanFile, PlanPageAnalysis, VisionExtraction, ExtractionDiscrepancy
 from conditions_models import RoofCondition
 from vision_prompts import (
     PAGE_TYPE_PROMPT,
@@ -31,6 +31,10 @@ from vision_prompts import (
     parse_vision_response,
     validate_extraction,
 )
+
+# Track C: vector extraction
+from vector_extraction import extract_vector_measurements, VECTOR_EXTRACTION_ENABLED
+from reconciliation import reconcile
 
 # ============================================================================
 # PROVIDER CONFIGURATION
@@ -495,9 +499,14 @@ EXTRACTION_TO_CONDITION = {
 
 
 def auto_create_conditions(project_id: int, plan_file_id: int, db: Session) -> list:
-    """Create RoofCondition records from VisionExtraction records."""
+    """Create RoofCondition records from primary VisionExtraction records.
+
+    Track C: only `is_primary=True` rows are used. Non-primary rows exist
+    for audit / review but should not auto-create conditions.
+    """
     extractions = db.query(VisionExtraction).filter(
-        VisionExtraction.plan_file_id == plan_file_id
+        VisionExtraction.plan_file_id == plan_file_id,
+        VisionExtraction.is_primary == True,  # Track C
     ).all()
 
     created_conditions = []
@@ -736,6 +745,28 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
         pages_to_extract = select_pages_for_extraction(page_images, roof_pages, page_classifications)
         extract_page_nums = [p["page_number"] for p in pages_to_extract]
         print(f"[Vision] Pages selected for extraction: {extract_page_nums}")
+
+        # ====================================================================
+        # Track C: Vector extraction path
+        # ====================================================================
+        # Run vector extraction in parallel with the vision pipeline. Both
+        # produce candidate measurements that get reconciled below.
+        vector_result = {"pdf_type": "raster", "measurements": [], "scale": None}
+        if VECTOR_EXTRACTION_ENABLED:
+            try:
+                print(f"[Vision] Running vector extraction in parallel with vision...")
+                vector_result = extract_vector_measurements(file_path, page_classifications)
+                plan_file.error_message = (
+                    f"Vector path: {vector_result['pdf_type']} PDF, "
+                    f"{len(vector_result['measurements'])} measurements"
+                )
+                db.commit()
+            except Exception as ve:
+                print(f"[Vision] Vector extraction failed (non-fatal): {ve}")
+                vector_result = {"pdf_type": "raster", "measurements": [], "scale": None,
+                                 "diagnostics": {"error": str(ve)}}
+        # NOTE: vision pipeline below ALWAYS runs. The user chose
+        # "always run both, store both, flag discrepancies for review."
 
         # Steps 3+4 merged: Detect scale PER-PAGE and extract measurements.
         # Different sheets in a commercial plan set can have different scales
@@ -994,8 +1025,10 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
             ds["value"] = rounded
             print(f"[Vision] Downspout rounded: {raw_val} -> {rounded} lnft")
 
-        extraction_count = 0
-        overall_confidence = 0.0
+        # Build the final vision-side measurement list (validate + apply
+        # confidence multipliers from validate_extraction so reconciliation
+        # sees the same values we used to persist).
+        vision_measurements_final = []
         for key, m in best_by_type.items():
             ext_type = m.get("type", "custom")
             value = m.get("value", 0)
@@ -1003,9 +1036,53 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
 
             is_valid, conf_multiplier, warning = validate_extraction(ext_type, value)
             confidence = m.get("confidence", 0.5) * conf_multiplier
-
             if not is_valid:
                 print(f"[Vision] Warning: {warning}")
+
+            vm = dict(m)
+            vm["type"] = ext_type
+            vm["value"] = value
+            vm["unit"] = unit
+            vm["confidence"] = confidence
+            vm["source"] = "vision"
+            vm.setdefault("notes", None)
+            vm.setdefault("_page_number", m.get("_page_number", 1))
+            vision_measurements_final.append(vm)
+
+        # ====================================================================
+        # Track C: Reconcile vector + vision measurements
+        # ====================================================================
+        vector_meas = vector_result.get("measurements", [])
+        # Tag vector measurements explicitly (in case anything was set elsewhere)
+        for vm in vector_meas:
+            vm.setdefault("source", "vector")
+
+        reconciliation_result = reconcile(vector_meas, vision_measurements_final)
+        primary_measurements = reconciliation_result["primary"]
+        discrepancies = reconciliation_result["discrepancies"]
+        all_candidates = reconciliation_result["all_candidates"]
+
+        print(f"[Vision] Reconciliation: {len(vector_meas)} vector + "
+              f"{len(vision_measurements_final)} vision -> {len(primary_measurements)} primary, "
+              f"{len(discrepancies)} discrepancies")
+
+        # Persist primary measurements (these drive auto-created conditions)
+        primary_id_set = {id(m) for m in primary_measurements}
+        extraction_count = 0
+        overall_confidence = 0.0
+        for m in primary_measurements:
+            ext_type = m.get("type", "custom")
+            value = m.get("value", 0)
+            unit = m.get("unit", "each")
+            confidence = float(m.get("confidence", 0.5) or 0.5)
+
+            page_scale_label = m.get("_page_scale", "unknown")
+            base_notes = m.get("notes") or ""
+            scale_note = f"scale: {page_scale_label}" if m.get("source") == "vision" else f"method: {m.get('measurement_method', 'unknown')}"
+            if base_notes:
+                combined_notes = f"{scale_note}; {base_notes}"
+            else:
+                combined_notes = scale_note
 
             extraction = VisionExtraction(
                 plan_file_id=plan_file_id,
@@ -1016,11 +1093,56 @@ def run_plan_analysis(project_id: int, plan_file_id: int, file_path: str, db: Se
                 confidence_score=confidence,
                 source_description=m.get("source", ""),
                 location_on_plan=m.get("location", ""),
-                notes=f"scale: {m.get('_page_scale', 'unknown')}" + (f"; {m.get('notes')}" if m.get("notes") else ""),
+                notes=combined_notes,
+                source=m.get("_primary_from", m.get("source", "vision")),
+                measurement_method=m.get("measurement_method"),
+                is_primary=True,
+                alternate_value=m.get("_alternate_value"),
+                alternate_source=m.get("_alternate_source"),
             )
             db.add(extraction)
             extraction_count += 1
             overall_confidence += confidence
+
+        # Also persist non-primary candidates as audit rows (is_primary=False).
+        for m in all_candidates:
+            if id(m) in primary_id_set:
+                continue
+            ext_type = m.get("type", "custom")
+            value = m.get("value", 0)
+            unit = m.get("unit", "each")
+            confidence = float(m.get("confidence", 0.5) or 0.5)
+            base_notes = m.get("notes") or ""
+            extraction = VisionExtraction(
+                plan_file_id=plan_file_id,
+                page_number=m.get("_page_number", 1),
+                extraction_type=ext_type,
+                measurement_value=value,
+                measurement_unit=unit,
+                confidence_score=confidence,
+                source_description=m.get("source", ""),
+                location_on_plan=m.get("location", ""),
+                notes=base_notes or None,
+                source=m.get("source", "unknown"),
+                measurement_method=m.get("measurement_method"),
+                is_primary=False,
+            )
+            db.add(extraction)
+
+        # Persist discrepancies for the review UI
+        for d in discrepancies:
+            db.add(ExtractionDiscrepancy(
+                plan_file_id=plan_file_id,
+                extraction_type=d["extraction_type"],
+                unit=d.get("unit"),
+                vector_value=d.get("vector_value"),
+                vision_value=d.get("vision_value"),
+                discrepancy_pct=d["discrepancy_pct"],
+                primary_source=d["primary_source"],
+                primary_value=d["primary_value"],
+                needs_review=d.get("needs_review", True),
+                notes=d.get("notes"),
+            ))
 
         db.commit()
 

@@ -161,6 +161,21 @@ def run_migrations(engine: Engine):
     if add_column_if_missing(engine, "roof_plan_files", "manual_scale_ratio", "FLOAT"):
         changes += 1
 
+    # ── Track C: vector extraction columns on vision_extractions ──
+    if add_column_if_missing(engine, "vision_extractions", "source", "VARCHAR(20)", default="vision"):
+        changes += 1
+    if add_column_if_missing(engine, "vision_extractions", "measurement_method", "VARCHAR(50)"):
+        changes += 1
+    if add_column_if_missing(engine, "vision_extractions", "is_primary", "BOOLEAN", default=False):
+        changes += 1
+    if add_column_if_missing(engine, "vision_extractions", "alternate_value", "FLOAT"):
+        changes += 1
+    if add_column_if_missing(engine, "vision_extractions", "alternate_source", "VARCHAR(20)"):
+        changes += 1
+
+    # ── Track C: extraction_discrepancies table is created by Base.metadata.create_all
+    # in main.py. No fallback needed here since create_all is invoked at startup.
+
     # ── roof_conditions: is_active + roof_system_id (system template approach) ──
     if add_column_if_missing(engine, "roof_conditions", "is_active", "BOOLEAN", True):
         changes += 1

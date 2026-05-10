@@ -65,7 +65,49 @@ class VisionExtraction(Base):
     condition_id = Column(Integer, ForeignKey("roof_conditions.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+    # Track C: vector + vision dual-source extraction
+    source = Column(String(20), default="vision",
+                    comment='"vector", "vision", or "primary"')
+    measurement_method = Column(String(50), nullable=True,
+                                comment='"polygon_area", "polyline_length", "dimension_label", "scale_measurement", etc.')
+    is_primary = Column(Boolean, default=False, index=True,
+                        comment="True for the reconciliation winner; condition rows are created from these")
+    alternate_value = Column(Float, nullable=True,
+                             comment="The other source's value when both contributed (e.g. vector value when vision was primary)")
+    alternate_source = Column(String(20), nullable=True,
+                              comment='"vector" or "vision" — what produced alternate_value')
+
     plan_file = relationship("RoofPlanFile", back_populates="extractions")
+
+
+class ExtractionDiscrepancy(Base):
+    """Logged when vector and vision disagree on the same measurement type.
+
+    Surfaced in the review UI (Track D) so an estimator can pick which source
+    to trust. Until Track D ships, these are visible via the existing
+    /plan-files/{id}/extractions endpoint by joining on plan_file_id.
+    """
+    __tablename__ = "extraction_discrepancies"
+
+    id = Column(Integer, primary_key=True, index=True)
+    plan_file_id = Column(Integer, ForeignKey("roof_plan_files.id"), nullable=False, index=True)
+    extraction_type = Column(String(50), nullable=False)
+    unit = Column(String(20), nullable=True)
+    vector_value = Column(Float, nullable=True)
+    vision_value = Column(Float, nullable=True)
+    discrepancy_pct = Column(Float, nullable=False)
+    primary_source = Column(String(20), nullable=False, comment='"vector" or "vision"')
+    primary_value = Column(Float, nullable=False)
+    needs_review = Column(Boolean, default=True, index=True)
+    notes = Column(Text, nullable=True)
+    resolved_by = Column(Integer, ForeignKey("users.id"), nullable=True,
+                         comment="Set when an estimator picks a winner via the review UI")
+    resolved_value = Column(Float, nullable=True,
+                            comment="The estimator's chosen value")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    resolved_at = Column(DateTime, nullable=True)
+
+    plan_file = relationship("RoofPlanFile")
 
 
 class PlanMarkup(Base):
