@@ -764,3 +764,35 @@ def delete_markup(
     db.delete(markup)
     db.commit()
     return {"message": "Markup deleted", "id": markup_id}
+
+
+@router.get("/plan-files/{plan_file_id}/discrepancies")
+def list_plan_file_discrepancies(
+    plan_file_id: int,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user),
+):
+    """List discrepancies between vector and vision for a plan file."""
+    from vision_models import ExtractionDiscrepancy
+    rows = db.query(ExtractionDiscrepancy).filter(
+        ExtractionDiscrepancy.plan_file_id == plan_file_id
+    ).order_by(ExtractionDiscrepancy.discrepancy_pct.desc()).all()
+    return [
+        {
+            "id": r.id,
+            "extraction_type": r.extraction_type,
+            "unit": r.unit,
+            "vector_value": r.vector_value,
+            "vision_value": r.vision_value,
+            "discrepancy_pct": r.discrepancy_pct,
+            "primary_source": r.primary_source,
+            "primary_value": r.primary_value,
+            "needs_review": r.needs_review,
+            "notes": r.notes,
+            "resolved_by": r.resolved_by,
+            "resolved_value": r.resolved_value,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+            "resolved_at": r.resolved_at.isoformat() if r.resolved_at else None,
+        }
+        for r in rows
+    ]
